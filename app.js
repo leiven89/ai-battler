@@ -331,6 +331,7 @@ const defaultState = {
   editorCharacterId: "player",
   editorTechniqueIndex: -1,
   selectedEnemyId: "eira",
+  chatSelectedId: "eira",
   characters: sampleCharacters,
   relations: {
     "player:eira": {
@@ -374,6 +375,24 @@ const defaultState = {
       timestamp: new Date().toISOString(),
     },
   ],
+  chats: {
+    "player:eira": [
+      {
+        id: createId(),
+        sender: "character",
+        text: "次に剣を交える前に確認しておくわ。貴方、今日は本気で来るのよね？",
+        timestamp: new Date().toISOString(),
+      },
+    ],
+    "player:shino": [
+      {
+        id: createId(),
+        sender: "character",
+        text: "この前の模擬戦、楽しかったよ。次は戦う前にも少し話せたら嬉しいな。",
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  },
   battle: null,
 };
 
@@ -407,6 +426,8 @@ const elements = {
   characterImageInput: document.getElementById("character-image-input"),
   removeCharacterImage: document.getElementById("remove-character-image"),
   enemyRoster: document.getElementById("enemy-roster"),
+  battleEnemySelect: document.getElementById("battle-enemy-select"),
+  battleMatchupBanner: document.getElementById("battle-matchup-banner"),
   battleMeta: document.getElementById("battle-meta"),
   startBattle: document.getElementById("start-battle"),
   playerCard: document.getElementById("player-card"),
@@ -418,6 +439,11 @@ const elements = {
   heatMeter: document.getElementById("heat-meter"),
   intervalBanner: document.getElementById("interval-banner"),
   intervalActions: document.getElementById("interval-actions"),
+  chatContactList: document.getElementById("chat-contact-list"),
+  chatThreadHeader: document.getElementById("chat-thread-header"),
+  chatThread: document.getElementById("chat-thread"),
+  chatForm: document.getElementById("chat-form"),
+  chatSend: document.getElementById("chat-send"),
   relationsList: document.getElementById("relations-list"),
   memoriesList: document.getElementById("memories-list"),
 };
@@ -429,6 +455,7 @@ function init() {
   bindApiSettings();
   bindCharacterEditor();
   bindBattleControls();
+  bindRelationshipChat();
   renderRelationshipBadges();
   renderAll();
 }
@@ -599,6 +626,12 @@ function bindCharacterEditor() {
 }
 
 function bindBattleControls() {
+  elements.battleEnemySelect.addEventListener("change", () => {
+    state.selectedEnemyId = elements.battleEnemySelect.value;
+    saveState();
+    renderAll();
+  });
+
   elements.startBattle.addEventListener("click", () => {
     startBattle();
     switchView("battle");
@@ -628,12 +661,44 @@ function bindBattleControls() {
   });
 }
 
+function bindRelationshipChat() {
+  elements.chatContactList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-chat-target]");
+    if (!button) {
+      return;
+    }
+
+    state.chatSelectedId = button.dataset.chatTarget;
+    saveState();
+    renderAll();
+  });
+
+  elements.chatForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const currentTarget = getChatTargetCharacter();
+    if (!currentTarget) {
+      return;
+    }
+
+    const form = new FormData(elements.chatForm);
+    const message = (form.get("message") || "").toString().trim();
+    if (!message) {
+      return;
+    }
+
+    await sendRelationshipChat(message, currentTarget.id);
+    elements.chatForm.reset();
+    renderAll();
+  });
+}
+
 function switchView(viewName) {
   elements.navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === viewName));
   elements.views.forEach((view) => view.classList.toggle("active", view.id === `view-${viewName}`));
 }
 
 function renderAll() {
+  ensureSelectedCharacterState();
   fillApiForm();
   fillCharacterTargetOptions();
   fillCharacterForm(getEditorCharacter());
@@ -644,6 +709,7 @@ function renderAll() {
   renderCharacterEditorActions();
   renderEnemyRoster();
   renderBattle();
+  renderRelationshipChat();
   renderRelations();
   renderMemories();
   renderHeroSummary();
@@ -878,6 +944,11 @@ function saveTechniqueFromEditor() {
 
 function renderEnemyRoster() {
   const enemies = state.characters.filter((character) => character.id !== "player");
+  elements.battleEnemySelect.innerHTML = enemies
+    .map((enemy) => `<option value="${escapeHtml(enemy.id)}">${escapeHtml(enemy.name)}</option>`)
+    .join("");
+  elements.battleEnemySelect.value = state.selectedEnemyId;
+
   elements.enemyRoster.innerHTML = enemies
     .map((enemy) => {
       const relation = getRelation("player", enemy.id);
@@ -902,6 +973,12 @@ function renderEnemyRoster() {
 
   const enemy = getCharacter(state.selectedEnemyId);
   const relation = getRelation("player", enemy.id);
+  elements.battleMatchupBanner.innerHTML = `
+    <strong>${escapeHtml(getPlayer().name)}</strong>
+    <span> VS </span>
+    <strong>${escapeHtml(enemy.name)}</strong>
+    <div class="memory-meta">${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect}</div>
+  `;
   elements.battleMeta.innerHTML = `
     <li><strong>現在の相手:</strong> ${escapeHtml(enemy.name)}</li>
     <li><strong>関係:</strong> ${escapeHtml(relation.title)}</li>
@@ -915,6 +992,21 @@ function renderBattle() {
   const enemy = getCharacter(state.selectedEnemyId);
   const battle = state.battle;
   elements.battleAiMode.textContent = getAiModeText();
+
+  if (!enemy) {
+    elements.playerCard.innerHTML = renderFighterCard(player, null);
+    elements.enemyCard.innerHTML = `<strong>対戦相手なし</strong><div>キャラを追加して相手を選んでください。</div>`;
+    elements.battleLog.innerHTML = `
+      <div class="log-entry system">
+        <strong>待機中</strong>
+        <div>対戦相手がいません。キャラ編集からキャラを追加するか、既存キャラを選んでください。</div>
+      </div>
+    `;
+    elements.heatMeter.textContent = "HEAT 0";
+    elements.intervalBanner.classList.add("hidden");
+    elements.battleSubmit.disabled = true;
+    return;
+  }
 
   if (!battle) {
     elements.playerCard.innerHTML = renderFighterCard(player, null);
@@ -944,6 +1036,217 @@ function renderBattle() {
   } else {
     elements.intervalBanner.classList.add("hidden");
   }
+}
+
+function renderRelationshipChat() {
+  const contacts = state.characters.filter((character) => character.id !== "player");
+  elements.chatContactList.innerHTML = contacts
+    .map((character) => {
+      const relation = getRelation("player", character.id);
+      const thread = getChatThread(character.id);
+      const lastMessage = thread.at(-1);
+      const activeClass = state.chatSelectedId === character.id ? "active" : "";
+      return `
+        <button class="chat-contact ${activeClass}" data-chat-target="${escapeHtml(character.id)}">
+          <div class="chat-contact-top">
+            <strong>${escapeHtml(character.name)}</strong>
+            <span class="badge">${escapeHtml(relation.title)}</span>
+          </div>
+          <div class="chat-contact-preview">${escapeHtml(lastMessage?.text || "まだ会話していません。")}</div>
+        </button>
+      `;
+    })
+    .join("");
+
+  const target = getChatTargetCharacter();
+  if (!target) {
+    elements.chatThreadHeader.innerHTML = "<h3>会話相手がいません</h3>";
+    elements.chatThread.innerHTML = "";
+    elements.chatSend.disabled = true;
+    return;
+  }
+
+  const relation = getRelation("player", target.id);
+  const thread = getChatThread(target.id);
+  elements.chatThreadHeader.innerHTML = `
+    <p class="eyebrow">LINE-like Relationship Chat</p>
+    <h2>${escapeHtml(target.name)}</h2>
+    <p>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect} / 警戒 ${relation.caution}</p>
+  `;
+  elements.chatThread.innerHTML = renderChatThread(thread);
+  elements.chatSend.disabled = false;
+}
+
+function renderChatThread(thread) {
+  if (!thread.length) {
+    return `<div class="chat-dayline">まだ会話はありません</div>`;
+  }
+
+  const items = [];
+  let lastDay = "";
+  thread.forEach((message) => {
+    const day = formatChatDay(message.timestamp);
+    if (day !== lastDay) {
+      items.push(`<div class="chat-dayline">${escapeHtml(day)}</div>`);
+      lastDay = day;
+    }
+    items.push(`
+      <article class="chat-bubble ${message.sender === "user" ? "user" : "character"}">
+        <div>${escapeHtml(message.text)}</div>
+        <span class="chat-bubble-meta">${escapeHtml(formatTimeOnly(message.timestamp))}</span>
+      </article>
+    `);
+  });
+  return items.join("");
+}
+
+async function sendRelationshipChat(message, targetId) {
+  const target = getCharacter(targetId);
+  const relation = getRelation("player", targetId);
+  const thread = getChatThread(targetId);
+  const delta = analyzeChatMessageEffect(message, relation);
+
+  thread.push({
+    id: createId(),
+    sender: "user",
+    text: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  applyRelationDelta(relation, delta);
+  relation.title = resolveRelationshipTitle(relation);
+
+  let replyPayload = null;
+  if (canUseApi()) {
+    try {
+      replyPayload = await generateAiRelationshipReply({
+        target,
+        relation,
+        playerMessage: message,
+        thread,
+      });
+      state.settings.apiStatus = `会話生成成功: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `会話はローカル応答に切替: ${error.message}`;
+    }
+  }
+
+  thread.push({
+    id: createId(),
+    sender: "character",
+    text: replyPayload?.reply || generateLocalRelationshipReply(target, relation, message, delta),
+    timestamp: new Date().toISOString(),
+  });
+
+  relation.lastMemory = replyPayload?.memoryHint || buildChatMemoryHint(target, delta);
+  relation.title = resolveRelationshipTitle(relation);
+  saveMemory(targetId, `会話: ${target.name}`, relation.lastMemory);
+  saveState();
+}
+
+function analyzeChatMessageEffect(message, relation) {
+  const delta = { friendship: 0, rivalry: 0, respect: 0, caution: 0 };
+  const normalized = normalizeTechniqueText(message);
+
+  if (/(ありがとう|助かった|感謝|うれしい|嬉しい)/.test(message)) {
+    delta.friendship += 2;
+    delta.respect += 1;
+  }
+  if (/(すごい|強い|尊敬|認め|かっこいい|さすが)/.test(message)) {
+    delta.respect += 2;
+    delta.friendship += 1;
+  }
+  if (/(ごめん|悪かった|謝る)/.test(message)) {
+    delta.friendship += 1;
+    delta.rivalry -= 1;
+    delta.caution -= 1;
+  }
+  if (/(心配|大丈夫|無理しない|休んで)/.test(message)) {
+    delta.friendship += 2;
+    delta.caution -= 1;
+  }
+  if (/(倒す|負けない|挑発|煽|かかってこい|次は勝つ)/.test(message)) {
+    delta.rivalry += 2;
+    delta.respect += 1;
+    delta.caution += 1;
+  }
+  if (/(嫌い|信用できない|怖い|警戒)/.test(message) || normalized.includes("きらい")) {
+    delta.friendship -= 1;
+    delta.caution += 2;
+  }
+
+  if (!Object.values(delta).some((value) => value !== 0)) {
+    if (relation.friendship >= 20) delta.friendship += 1;
+    else if (relation.rivalry >= 20) delta.rivalry += 1;
+    else delta.respect += 1;
+  }
+
+  return delta;
+}
+
+function generateLocalRelationshipReply(target, relation, message, delta) {
+  const warm = relation.friendship >= 24;
+  const hostile = relation.rivalry >= 24 || relation.caution >= 24;
+  const respectful = relation.respect >= 18;
+  const voice = archetypeVoices[target.archetype] || archetypeVoices.cool;
+
+  if (delta.friendship >= 2 && warm) {
+    if (target.archetype === "gentle") return "えへへ、そう言ってもらえると嬉しいな。あなたと話す時間、けっこう好きかも。";
+    if (target.archetype === "cool") return "そういう言葉は嫌いじゃない。今のやり取りは覚えておく。";
+  }
+
+  if (delta.respect >= 2 && respectful) {
+    if (target.archetype === "proud") return "見る目はあるのね。そこまで言うなら、次はもっと高いところで受けて立つわ。";
+    return "その評価は軽く扱わない。次は言葉だけじゃなく、結果でも返そう。";
+  }
+
+  if (delta.rivalry >= 2 && hostile) {
+    if (target.archetype === "proud") return "その挑発、嫌いじゃないわ。なら次は本当に折りに行く。覚悟しておきなさい。";
+    if (target.archetype === "rough") return "いいじゃねぇか。そういう火花の方が、話してても熱くなる。";
+    return "また煽るのね。でも、そのくらいの火種がある方が次は面白い。";
+  }
+
+  if (delta.caution > 0 && relation.caution >= 20) {
+    return "……その言葉、まだ測っているところ。軽々しく踏み込むつもりはない。";
+  }
+
+  if (/戦い|バトル|模擬戦|次/.test(message)) {
+    return warm
+      ? "次に戦う時は、今より少しだけ息を合わせられる気がする。"
+      : hostile
+        ? "次があるなら、今度はもっとはっきり決着をつける。"
+        : "次に向けて、少し準備をしておく。話したぶんだけ見えたものもある。";
+  }
+
+  if (warm) {
+    return `${voice.greeting} ……ってほど堅くはないか。こうして話す時間も、悪くないね。`;
+  }
+
+  if (hostile) {
+    return `${voice.resolve} ただ、勘違いしないで。馴れ合うつもりはまだない。`;
+  }
+
+  if (respectful) {
+    return `あなたの言葉は軽くは扱わない。${voice.praise}`;
+  }
+
+  return `${voice.resolve} でも、今の話は覚えておく。`;
+}
+
+function buildChatMemoryHint(target, delta) {
+  if (delta.friendship >= 2) {
+    return `${target.name}は会話の中で少しだけ心を開いた`;
+  }
+  if (delta.rivalry >= 2) {
+    return `${target.name}は会話の挑発を新たな火種として記憶した`;
+  }
+  if (delta.respect >= 2) {
+    return `${target.name}は言葉の端から実力への敬意を感じ取った`;
+  }
+  if (delta.caution >= 2) {
+    return `${target.name}はまだ警戒を解かず、言葉の裏を探っていた`;
+  }
+  return `${target.name}と短い会話を交わし、戦いの外側の温度が少しだけ見えた`;
 }
 
 function renderIntervalChoices() {
@@ -1058,6 +1361,10 @@ function renderLog(entry) {
 function startBattle() {
   const player = getPlayer();
   const enemy = getCharacter(state.selectedEnemyId);
+  if (!enemy) {
+    appendSystemNotice("対戦相手がまだ選ばれていません。");
+    return;
+  }
   const relation = getRelation("player", enemy.id);
   state.battle = {
     enemyId: enemy.id,
@@ -1519,6 +1826,48 @@ async function generateAiTurnText(context) {
   return JSON.parse(text);
 }
 
+async function generateAiRelationshipReply({ target, relation, playerMessage, thread }) {
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are writing a Japanese messenger-app reply for an original character relationship game.",
+    "Reflect the target character's personality, tone, memories, and current relationship values.",
+    "",
+    "Output keys:",
+    "reply, moodNote, memoryHint",
+    "",
+    `Target character: ${compactCharacterSheet(target)}`,
+    `Relationship: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
+    `Player message: ${playerMessage}`,
+    `Recent thread: ${JSON.stringify(thread.slice(-6))}`,
+    "",
+    "Requirements:",
+    "- reply should be 1 to 3 short Japanese messenger-style sentences.",
+    "- moodNote should summarize the emotional reaction in one sentence.",
+    "- memoryHint should be a short sentence suitable for a memory log.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.5, state.settings.temperature),
+    maxTokens: 320,
+    responseSchema: {
+      type: "object",
+      required: ["reply", "moodNote", "memoryHint"],
+      properties: {
+        reply: { type: "string" },
+        moodNote: { type: "string" },
+        memoryHint: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
 async function fetchCohereJson({ model, temperature, maxTokens, messages, responseSchema }) {
   const response = await fetch(INTERNAL_CHAT_URL, {
     method: "POST",
@@ -1688,6 +2037,50 @@ function getRelation(sourceId, targetId) {
     };
   }
   return state.relations[key];
+}
+
+function applyRelationDelta(relation, delta) {
+  relation.friendship += delta.friendship || 0;
+  relation.rivalry += delta.rivalry || 0;
+  relation.respect += delta.respect || 0;
+  relation.caution += delta.caution || 0;
+  relation.friendship = clamp(relation.friendship, 0, 100);
+  relation.rivalry = clamp(relation.rivalry, 0, 100);
+  relation.respect = clamp(relation.respect, 0, 100);
+  relation.caution = clamp(relation.caution, 0, 100);
+}
+
+function getChatKey(targetId) {
+  return `player:${targetId}`;
+}
+
+function getChatThread(targetId) {
+  const key = getChatKey(targetId);
+  if (!state.chats[key]) {
+    state.chats[key] = [];
+  }
+  return state.chats[key];
+}
+
+function getChatTargetCharacter() {
+  return getCharacter(state.chatSelectedId);
+}
+
+function ensureSelectedCharacterState() {
+  const enemies = state.characters.filter((character) => character.id !== "player");
+  const fallbackEnemy = enemies[0] || null;
+
+  if (!getCharacter(state.selectedEnemyId) || state.selectedEnemyId === "player") {
+    state.selectedEnemyId = fallbackEnemy?.id || "";
+  }
+
+  if (!getCharacter(state.chatSelectedId) || state.chatSelectedId === "player") {
+    state.chatSelectedId = fallbackEnemy?.id || "";
+  }
+
+  if (!getCharacter(state.editorCharacterId)) {
+    state.editorCharacterId = "player";
+  }
 }
 
 function getPlayer() {
@@ -1895,6 +2288,11 @@ function cleanupCharacterData(characterId) {
   if (state.battle?.enemyId === characterId) {
     state.battle = null;
   }
+  delete state.chats[getChatKey(characterId)];
+  if (state.chatSelectedId === characterId) {
+    const fallback = state.characters.find((character) => character.id !== "player" && character.id !== characterId);
+    state.chatSelectedId = fallback?.id || "";
+  }
 }
 
 function appendLog(type, label, text) {
@@ -1941,6 +2339,20 @@ function formatDate(value) {
   return new Intl.DateTimeFormat("ja-JP", {
     month: "short",
     day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatChatDay(value) {
+  return new Intl.DateTimeFormat("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+  }).format(new Date(value));
+}
+
+function formatTimeOnly(value) {
+  return new Intl.DateTimeFormat("ja-JP", {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
@@ -2029,6 +2441,7 @@ function loadState() {
       },
       characters,
       customCharacterCount: Number(parsed.customCharacterCount) || customCharacters.length || 0,
+      chats: parsed.chats || structuredClone(defaultState.chats),
       battle: parsed.battle || null,
     };
   } catch (error) {

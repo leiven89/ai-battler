@@ -431,6 +431,12 @@ input[type="range"] {
   gap: 18px;
 }
 
+.chat-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 18px;
+}
+
 .enemy-roster,
 .relations-list,
 .memories-list {
@@ -458,6 +464,16 @@ input[type="range"] {
   color: var(--muted);
   padding-left: 0;
   list-style: none;
+}
+
+.matchup-banner {
+  margin: 14px 0 16px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(125, 23, 38, 0.1), rgba(28, 79, 105, 0.12));
+  border: 1px solid rgba(125, 23, 38, 0.12);
+  font-weight: 700;
+  line-height: 1.6;
 }
 
 .arena-header {
@@ -589,6 +605,114 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.chat-sidebar,
+.chat-main {
+  min-height: 760px;
+}
+
+.chat-contact-list {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-contact {
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+}
+
+.chat-contact.active {
+  border-color: rgba(28, 79, 105, 0.3);
+  background: linear-gradient(135deg, rgba(28, 79, 105, 0.14), rgba(255, 255, 255, 0.84));
+}
+
+.chat-contact-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.chat-contact-preview {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.chat-thread-header {
+  padding: 8px 0 18px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+.chat-thread {
+  height: 520px;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 8px 0 8px;
+}
+
+.chat-dayline {
+  justify-self: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(28, 79, 105, 0.1);
+  color: var(--accent-cold);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.chat-bubble {
+  max-width: min(78%, 560px);
+  padding: 12px 14px;
+  border-radius: 20px;
+  line-height: 1.7;
+  box-shadow: 0 8px 20px rgba(53, 29, 18, 0.06);
+}
+
+.chat-bubble.user {
+  justify-self: end;
+  background: linear-gradient(135deg, #7d1726, #aa3646);
+  color: #fff7f1;
+  border-bottom-right-radius: 6px;
+}
+
+.chat-bubble.character {
+  justify-self: start;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(28, 79, 105, 0.1);
+  border-bottom-left-radius: 6px;
+}
+
+.chat-bubble-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.chat-form {
+  margin-top: 18px;
+}
+
+.chat-composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.chat-composer textarea {
+  min-height: 84px;
+}
+
 .stat-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -610,6 +734,7 @@ input[type="range"] {
   .hero,
   .panel-grid,
   .battle-layout,
+  .chat-layout,
   .editor-grid,
   .technique-builder,
   .arena-header,
@@ -629,5 +754,9 @@ input[type="range"] {
 
   .stat-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chat-composer {
+    grid-template-columns: 1fr;
   }
 }

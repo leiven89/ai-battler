@@ -35,6 +35,7 @@
       <button class="nav-btn active" data-view="home">ホーム</button>
       <button class="nav-btn" data-view="editor">キャラ編集</button>
       <button class="nav-btn" data-view="battle">バトル</button>
+      <button class="nav-btn" data-view="chat">チャット</button>
       <button class="nav-btn" data-view="relations">関係一覧</button>
       <button class="nav-btn" data-view="memories">記憶ログ</button>
     </nav>
@@ -318,6 +319,11 @@
         <div class="battle-layout">
           <aside class="panel roster-panel">
             <h2>対戦相手</h2>
+            <label>
+              対戦相手を選ぶ
+              <select id="battle-enemy-select"></select>
+            </label>
+            <div class="matchup-banner" id="battle-matchup-banner"></div>
             <div id="enemy-roster" class="enemy-roster"></div>
             <button class="primary-btn block-btn" id="start-battle">バトル開始</button>
             <div class="battle-meta" id="battle-meta"></div>
@@ -376,6 +382,31 @@
               </label>
               <div class="form-actions wide">
                 <button class="primary-btn" type="submit" id="battle-submit">行動する</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-chat">
+        <div class="chat-layout">
+          <aside class="panel chat-sidebar">
+            <div class="section-header compact">
+              <div>
+                <p class="eyebrow">Relationship Chat</p>
+                <h2>会話相手</h2>
+              </div>
+            </div>
+            <div id="chat-contact-list" class="chat-contact-list"></div>
+          </aside>
+
+          <section class="panel chat-main">
+            <div class="chat-thread-header" id="chat-thread-header"></div>
+            <div id="chat-thread" class="chat-thread"></div>
+            <form id="chat-form" class="chat-form">
+              <div class="chat-composer">
+                <textarea name="message" rows="3" placeholder="例：この前の戦い、すごかった。今度はちゃんと話したい。"></textarea>
+                <button class="primary-btn" type="submit" id="chat-send">送信</button>
               </div>
             </form>
           </section>
