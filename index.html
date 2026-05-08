@@ -250,6 +250,53 @@
               <textarea name="notes" rows="4" placeholder="設定メモ、裏設定、関係の方針、口調メモなど"></textarea>
             </label>
 
+            <section class="wide technique-panel">
+              <div class="section-header compact">
+                <div>
+                  <p class="eyebrow">Techniques</p>
+                  <h3>技編集</h3>
+                </div>
+              </div>
+              <p class="helper-text">
+                技名そのものだけでなく、別名や説明に近い表現が行動入力に入っていれば、その技を使ったと判定します。
+              </p>
+              <div class="technique-builder">
+                <label>
+                  技名
+                  <input type="text" id="technique-name-input" placeholder="例：氷刃">
+                </label>
+                <label>
+                  種別
+                  <input type="text" id="technique-type-input" placeholder="例：斬撃 / 魔法 / 補助">
+                </label>
+                <label class="wide">
+                  別名・類似表現
+                  <input type="text" id="technique-aliases-input" placeholder="例：氷の刃、氷刃を使用、氷の斬撃">
+                </label>
+                <label>
+                  基礎スタミナ消費
+                  <input type="number" id="technique-stamina-input" min="0" max="40" step="1" value="10">
+                </label>
+                <label>
+                  威力補正
+                  <input type="number" id="technique-power-input" min="0" max="12" step="1" value="4">
+                </label>
+                <label class="wide">
+                  効果
+                  <textarea id="technique-effect-input" rows="2" placeholder="例：氷属性の単体斬撃。命中時に警戒値が上がりやすい。"></textarea>
+                </label>
+                <label class="wide">
+                  演出メモ
+                  <textarea id="technique-description-input" rows="2" placeholder="例：氷の刃を飛ばして敵を切り裂く。類似表現の判定にも使われる。"></textarea>
+                </label>
+              </div>
+              <div class="form-actions">
+                <button class="secondary-btn" type="button" id="clear-technique">入力をクリア</button>
+                <button class="primary-btn" type="button" id="save-technique">技を登録</button>
+              </div>
+              <div id="technique-list" class="technique-list"></div>
+            </section>
+
             <div class="stat-group">
               <h3>ステータス</h3>
               <label>ATK <input type="range" min="20" max="100" name="atk"></label>
@@ -307,6 +354,9 @@
                 行動入力
                 <textarea name="action" rows="3" placeholder="例：影の羽で視界を奪い、横から斬り込む"></textarea>
               </label>
+              <p class="helper-text wide">
+                登録済みの技名、別名、説明に近い表現が入っていると、その技を発動したものとして判定します。
+              </p>
               <label>
                 チャットカテゴリ
                 <select name="chatCategory">

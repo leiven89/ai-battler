@@ -124,8 +124,12 @@ function makeCharacter(overrides = {}) {
     victoryStyle: "",
     notes: "",
     imageDataUrl: "",
+    techniques: [],
     stats: { atk: 60, spd: 60, mind: 60, charm: 60 },
     ...overrides,
+    techniques: Array.isArray(overrides.techniques)
+      ? overrides.techniques.map((technique) => makeTechnique(technique))
+      : [],
     stats: {
       atk: 60,
       spd: 60,
@@ -167,6 +171,18 @@ const sampleCharacters = [
     defeatStyle: "膝をついても相手の癖を観察し、次の糸口を探す。",
     victoryStyle: "深追いせず、静かに刃を収める。",
     notes: "しのとの関係を戦友寄りに育てたい。エイラとはライバル路線、セラとは警戒と尊敬が混ざる方向。",
+    techniques: [
+      {
+        id: createId(),
+        name: "黒羽散し",
+        type: "牽制",
+        aliases: "黒い羽を散らす,影羽で視界を奪う,羽根で目くらまし",
+        staminaCost: 8,
+        power: 3,
+        effect: "視界妨害からの奇襲。警戒値を上げやすい。",
+        description: "黒い羽根を散らして相手の視界を切り裂き、その隙に位置をずらす。",
+      },
+    ],
     stats: { atk: 76, spd: 88, mind: 73, charm: 62 },
   }),
   makeCharacter({
@@ -199,6 +215,18 @@ const sampleCharacters = [
     defeatStyle: "敗北を記録に変え、次回の再現防止に使う。",
     victoryStyle: "相手の強みを短く評し、次の課題を切り分ける。",
     notes: "レイ相手だとライバル色が強い。挑発で熱が上がるほど言葉も鋭くなる。",
+    techniques: [
+      {
+        id: createId(),
+        name: "紫電断",
+        type: "斬撃",
+        aliases: "紫の刃で斬る,光刃を最大出力で振るう,紫雷の斬撃",
+        staminaCost: 12,
+        power: 6,
+        effect: "高速接近からの高火力斬撃。",
+        description: "紫の光刃を圧縮し、踏み込みと同時に断ち切る。",
+      },
+    ],
     stats: { atk: 83, spd: 91, mind: 75, charm: 55 },
   }),
   makeCharacter({
@@ -231,6 +259,18 @@ const sampleCharacters = [
     defeatStyle: "悔しさを飲み込みつつ、相手の強さを認める。",
     victoryStyle: "相手を気遣いながら、無理をしないよう声を掛ける。",
     notes: "レイとは戦友候補。模擬戦でも友情値が上がりやすい。",
+    techniques: [
+      {
+        id: createId(),
+        name: "氷刃",
+        type: "氷結斬撃",
+        aliases: "氷の刃,氷の刃を飛ばす,氷の斬撃",
+        staminaCost: 10,
+        power: 5,
+        effect: "氷属性の単体攻撃。命中時に相手の警戒が上がりやすい。",
+        description: "氷の刃を飛ばして直撃させる。似た描写でもこの技として判定されやすい。",
+      },
+    ],
     stats: { atk: 68, spd: 60, mind: 89, charm: 80 },
   }),
   makeCharacter({
@@ -263,6 +303,18 @@ const sampleCharacters = [
     defeatStyle: "解析不能として一度受け止め、次回に再定義する。",
     victoryStyle: "結果を淡々と確認し、次の仮説へ移行する。",
     notes: "レイには警戒と興味。エイラとは因縁寄りの共同戦線も似合う。",
+    techniques: [
+      {
+        id: createId(),
+        name: "零域観測",
+        type: "解析",
+        aliases: "行動解析,予測線を引く,観測で封じる",
+        staminaCost: 9,
+        power: 4,
+        effect: "予測と拘束の複合技。防御や回避の布石に向く。",
+        description: "敵の動線を観測し、氷の解析線で逃げ道を狭める。",
+      },
+    ],
     stats: { atk: 71, spd: 72, mind: 95, charm: 48 },
   }),
 ];
@@ -277,6 +329,7 @@ const defaultState = {
   },
   customCharacterCount: 0,
   editorCharacterId: "player",
+  editorTechniqueIndex: -1,
   selectedEnemyId: "eira",
   characters: sampleCharacters,
   relations: {
@@ -337,6 +390,16 @@ const elements = {
   characterForm: document.getElementById("character-form"),
   editorCharacterSelect: document.getElementById("editor-character-select"),
   characterPreview: document.getElementById("character-preview"),
+  techniqueNameInput: document.getElementById("technique-name-input"),
+  techniqueTypeInput: document.getElementById("technique-type-input"),
+  techniqueAliasesInput: document.getElementById("technique-aliases-input"),
+  techniqueStaminaInput: document.getElementById("technique-stamina-input"),
+  techniquePowerInput: document.getElementById("technique-power-input"),
+  techniqueEffectInput: document.getElementById("technique-effect-input"),
+  techniqueDescriptionInput: document.getElementById("technique-description-input"),
+  techniqueList: document.getElementById("technique-list"),
+  clearTechnique: document.getElementById("clear-technique"),
+  saveTechnique: document.getElementById("save-technique"),
   createCharacter: document.getElementById("create-character"),
   deleteCharacter: document.getElementById("delete-character"),
   resetCharacter: document.getElementById("reset-character"),
@@ -414,6 +477,7 @@ function bindApiSettings() {
 function bindCharacterEditor() {
   elements.editorCharacterSelect.addEventListener("change", () => {
     state.editorCharacterId = elements.editorCharacterSelect.value;
+    state.editorTechniqueIndex = -1;
     saveState();
     renderAll();
   });
@@ -422,6 +486,7 @@ function bindCharacterEditor() {
     const newCharacter = buildNewCustomCharacter();
     state.characters.push(newCharacter);
     state.editorCharacterId = newCharacter.id;
+    state.editorTechniqueIndex = -1;
     state.selectedEnemyId = newCharacter.id;
     saveState();
     renderAll();
@@ -437,6 +502,7 @@ function bindCharacterEditor() {
     state.characters = state.characters.filter((character) => character.id !== current.id);
     cleanupCharacterData(current.id);
     state.editorCharacterId = "player";
+    state.editorTechniqueIndex = -1;
 
     const availableEnemy = state.characters.find((character) => character.id !== "player");
     if (state.selectedEnemyId === current.id && availableEnemy) {
@@ -465,8 +531,46 @@ function bindCharacterEditor() {
     const sample = sampleCharacters.find((character) => character.id === targetId);
     const resetCharacter = sample || buildEmptyCharacterTemplate(targetId);
     updateCharacter(targetId, resetCharacter);
+    state.editorTechniqueIndex = -1;
     saveState();
     renderAll();
+  });
+
+  elements.saveTechnique.addEventListener("click", () => {
+    saveTechniqueFromEditor();
+  });
+
+  elements.clearTechnique.addEventListener("click", () => {
+    state.editorTechniqueIndex = -1;
+    renderTechniqueBuilder(getEditorCharacter());
+  });
+
+  elements.techniqueList.addEventListener("click", (event) => {
+    const actionButton = event.target.closest("[data-technique-action]");
+    if (!actionButton) {
+      return;
+    }
+
+    const index = Number(actionButton.dataset.techniqueIndex);
+    const actionType = actionButton.dataset.techniqueAction;
+    const character = getEditorCharacter();
+    if (!character || !character.techniques[index]) {
+      return;
+    }
+
+    if (actionType === "edit") {
+      state.editorTechniqueIndex = index;
+      renderTechniqueBuilder(character);
+      return;
+    }
+
+    if (actionType === "delete") {
+      const techniques = character.techniques.filter((_, techniqueIndex) => techniqueIndex !== index);
+      updateCharacter(character.id, { ...character, techniques });
+      state.editorTechniqueIndex = -1;
+      saveState();
+      renderAll();
+    }
   });
 
   elements.characterImageInput.addEventListener("change", async (event) => {
@@ -535,6 +639,8 @@ function renderAll() {
   fillCharacterForm(getEditorCharacter());
   renderCharacterPreview(getEditorCharacter());
   renderCharacterImage(getEditorCharacter());
+  renderTechniqueBuilder(getEditorCharacter());
+  renderTechniqueList(getEditorCharacter());
   renderCharacterEditorActions();
   renderEnemyRoster();
   renderBattle();
@@ -679,6 +785,9 @@ function renderCharacterImage(character) {
 
 function renderCharacterPreview(character) {
   const voice = archetypeVoices[character.archetype] || archetypeVoices.cool;
+  const techniquePreview = character.techniques.length
+    ? character.techniques.map((technique) => technique.name).join(" / ")
+    : "未登録";
   elements.characterPreview.innerHTML = `
     <h3>${escapeHtml(character.name)}${character.title ? ` / ${escapeHtml(character.title)}` : ""}</h3>
     <p>${escapeHtml(character.personality || voice.descriptor)}</p>
@@ -686,9 +795,85 @@ function renderCharacterPreview(character) {
     <p><strong>能力:</strong> ${escapeHtml(character.ability || "未設定")}</p>
     <p><strong>戦闘:</strong> ${escapeHtml(character.style || "未設定")}</p>
     <p><strong>奥義:</strong> ${escapeHtml(character.ultimate || "未設定")}</p>
+    <p><strong>技:</strong> ${escapeHtml(techniquePreview)}</p>
     <p><strong>備考:</strong> ${escapeHtml(character.notes || "なし")}</p>
     <p><strong>サンプル台詞:</strong> 「${escapeHtml(character.gratitudeStyle || voice.thanks)}」</p>
   `;
+}
+
+function renderTechniqueBuilder(character) {
+  const currentTechnique = state.editorTechniqueIndex >= 0 ? character.techniques[state.editorTechniqueIndex] : null;
+  elements.techniqueNameInput.value = currentTechnique?.name || "";
+  elements.techniqueTypeInput.value = currentTechnique?.type || "";
+  elements.techniqueAliasesInput.value = currentTechnique?.aliases || "";
+  elements.techniqueStaminaInput.value = currentTechnique?.staminaCost ?? 10;
+  elements.techniquePowerInput.value = currentTechnique?.power ?? 4;
+  elements.techniqueEffectInput.value = currentTechnique?.effect || "";
+  elements.techniqueDescriptionInput.value = currentTechnique?.description || "";
+  elements.saveTechnique.textContent = state.editorTechniqueIndex >= 0 ? "技を更新" : "技を登録";
+}
+
+function renderTechniqueList(character) {
+  if (!character.techniques.length) {
+    elements.techniqueList.innerHTML = `<div class="technique-card"><strong>技なし</strong><div>まだ技は登録されていません。</div></div>`;
+    return;
+  }
+
+  elements.techniqueList.innerHTML = character.techniques
+    .map((technique, index) => `
+      <article class="technique-card">
+        <div class="section-header compact">
+          <div>
+            <h3>${escapeHtml(technique.name)}</h3>
+            <p class="memory-meta">${escapeHtml(technique.type || "未分類")}</p>
+          </div>
+        </div>
+        <div class="technique-meta">
+          <span class="technique-tag">消費 ${technique.staminaCost}</span>
+          <span class="technique-tag">威力補正 ${technique.power}</span>
+          ${technique.aliases ? `<span class="technique-tag">別名 ${escapeHtml(technique.aliases)}</span>` : ""}
+        </div>
+        <p><strong>効果:</strong> ${escapeHtml(technique.effect || "未設定")}</p>
+        <p><strong>演出メモ:</strong> ${escapeHtml(technique.description || "未設定")}</p>
+        <div class="technique-actions">
+          <button class="secondary-btn" type="button" data-technique-action="edit" data-technique-index="${index}">編集</button>
+          <button class="secondary-btn" type="button" data-technique-action="delete" data-technique-index="${index}">削除</button>
+        </div>
+      </article>
+    `)
+    .join("");
+}
+
+function saveTechniqueFromEditor() {
+  const character = getEditorCharacter();
+  const name = elements.techniqueNameInput.value.trim();
+  if (!name) {
+    appendSystemNotice("技名を入れてください。");
+    return;
+  }
+
+  const technique = makeTechnique({
+    id: state.editorTechniqueIndex >= 0 ? character.techniques[state.editorTechniqueIndex]?.id : createId(),
+    name,
+    type: elements.techniqueTypeInput.value.trim(),
+    aliases: elements.techniqueAliasesInput.value.trim(),
+    staminaCost: Number(elements.techniqueStaminaInput.value) || 0,
+    power: Number(elements.techniquePowerInput.value) || 0,
+    effect: elements.techniqueEffectInput.value.trim(),
+    description: elements.techniqueDescriptionInput.value.trim(),
+  });
+
+  const techniques = [...character.techniques];
+  if (state.editorTechniqueIndex >= 0 && techniques[state.editorTechniqueIndex]) {
+    techniques[state.editorTechniqueIndex] = technique;
+  } else {
+    techniques.push(technique);
+  }
+
+  updateCharacter(character.id, { ...character, techniques });
+  state.editorTechniqueIndex = -1;
+  saveState();
+  renderAll();
 }
 
 function renderEnemyRoster() {
@@ -1152,19 +1337,32 @@ function resolvePostBattleEvent(relation, playerWon, enemy, memoryHint) {
 function evaluateAction(attacker, defender, relation, action, turn, half) {
   const actorState = structuredClone(state.battle.playerState);
   const enemyState = structuredClone(state.battle.enemyState);
-  const keywordBoost = keywordScore(action, attacker);
+  const triggeredTechnique = detectTriggeredTechnique(action, attacker);
+  const techniquePowerBonus = triggeredTechnique ? triggeredTechnique.technique.power * 1.6 + triggeredTechnique.matchScore : 0;
+  const keywordBoost = keywordScore(action, attacker, triggeredTechnique) + techniquePowerBonus;
   const riskPenalty = riskScore(action);
   const attackWeight = attacker.stats.atk * 0.42 + attacker.stats.spd * 0.28 + attacker.stats.mind * 0.18 + keywordBoost;
   const defenseWeight = defender.stats.spd * 0.25 + defender.stats.mind * 0.3 + relation.caution * 0.35;
   const advantage = attackWeight - defenseWeight - riskPenalty + randomBetween(-8, 8);
-  const damage = clamp(Math.round(10 + advantage / 5), 4, 28);
-  const staminaCost = clamp(Math.round(8 + Math.max(0, riskPenalty / 4) + (half === "back" ? 2 : 0)), 7, 18);
+  const techniqueSituationCost = triggeredTechnique ? calculateTechniqueSituationCost(action, triggeredTechnique.technique, half, turn) : 0;
+  const damage = clamp(Math.round(10 + advantage / 5 + (triggeredTechnique?.technique.power || 0) * 0.8), 4, 32);
+  const staminaCost = clamp(
+    Math.round(
+      8 +
+      Math.max(0, riskPenalty / 4) +
+      (half === "back" ? 2 : 0) +
+      (triggeredTechnique?.technique.staminaCost || 0) +
+      techniqueSituationCost
+    ),
+    5,
+    36,
+  );
   const mentalShift = advantage > 10 ? -2 : advantage < -5 ? 2 : 0;
   const relationDelta = {
     friendship: action.includes("守") || action.includes("助") ? 2 : 0,
-    rivalry: action.includes("挑") || action.includes("斬") ? 2 : 1,
-    respect: advantage > 5 ? 2 : 1,
-    caution: advantage > 0 ? 3 : 1,
+    rivalry: action.includes("挑") || action.includes("斬") || triggeredTechnique ? 2 : 1,
+    respect: advantage > 5 ? 2 + (triggeredTechnique ? 1 : 0) : 1,
+    caution: advantage > 0 ? 3 + (triggeredTechnique ? 1 : 0) : 1,
   };
 
   enemyState.hp -= damage;
@@ -1175,18 +1373,20 @@ function evaluateAction(attacker, defender, relation, action, turn, half) {
 
   const severity = advantage > 12 ? "深く" : advantage > 2 ? "浅く" : "かろうじて";
   const damageWord = damage >= 20 ? "大ダメージ" : damage >= 11 ? "中ダメージ" : "小ダメージ";
-  const actionFlavor = actionFlavorText(attacker, defender, action, advantage, severity);
+  const actionFlavor = actionFlavorText(attacker, defender, action, advantage, severity, triggeredTechnique);
 
   return {
     advantage,
     damage,
     staminaCost,
+    triggeredTechnique,
+    techniqueSituationCost,
     mentalShift,
     relationDelta,
     playerStateAfter: actorState,
     enemyStateAfter: enemyState,
     log: actionFlavor,
-    summary: `${defender.name}に${damageWord}。${attacker.name}のSTAMINA -${staminaCost}。${defender.name}の警戒値 +${relationDelta.caution}。`,
+    summary: `${triggeredTechnique ? `技「${triggeredTechnique.technique.name}」発動。` : ""}${defender.name}に${damageWord}。${attacker.name}のSTAMINA -${staminaCost}。${defender.name}の警戒値 +${relationDelta.caution}。`,
   };
 }
 
@@ -1244,6 +1444,15 @@ async function generateAiTurnText(context) {
     `Half: ${context.battle.half}`,
     `Player action: ${context.action}`,
     `Chat category: ${context.chatCategory || "none"}`,
+    `Triggered technique: ${context.playerOutcome.triggeredTechnique ? JSON.stringify({
+      name: context.playerOutcome.triggeredTechnique.technique.name,
+      type: context.playerOutcome.triggeredTechnique.technique.type,
+      effect: context.playerOutcome.triggeredTechnique.technique.effect,
+      description: context.playerOutcome.triggeredTechnique.technique.description,
+      matchedBy: context.playerOutcome.triggeredTechnique.matchedBy,
+      matchScore: context.playerOutcome.triggeredTechnique.matchScore,
+      extraSituationCost: context.playerOutcome.techniqueSituationCost,
+    }) : "none"}`,
     "",
     `Player sheet: ${compactCharacterSheet(context.player)}`,
     `Enemy sheet: ${compactCharacterSheet(context.enemy)}`,
@@ -1352,6 +1561,7 @@ function compactCharacterSheet(character) {
     ultimate: character.ultimate,
     likes: character.likes,
     dislikes: character.dislikes,
+    techniques: character.techniques,
     mannerisms: character.mannerisms,
     favoritePhrase: character.favoritePhrase,
     hatedPhrase: character.hatedPhrase,
@@ -1405,23 +1615,29 @@ function openingLine(player, enemy, relation) {
   return "初対面に近い空気だ。ここでの言動が、次の物語を決めるかもしれない。";
 }
 
-function actionFlavorText(attacker, defender, action, advantage, severity) {
+function actionFlavorText(attacker, defender, action, advantage, severity, triggeredTechnique) {
+  const techniqueLead = triggeredTechnique
+    ? triggeredTechnique.matchedBy === "exact-name"
+      ? `${attacker.name}は技「${triggeredTechnique.technique.name}」を発動し、${action}。`
+      : `${attacker.name}は${action}。その動きは技「${triggeredTechnique.technique.name}」として形を結ぶ。`
+    : `${attacker.name}は${action}。`;
   if (advantage > 10) {
-    return `${attacker.name}は${action}。動きは迷いなく噛み合い、${defender.name}へ${severity}刃を通した。`;
+    return `${techniqueLead} 動きは迷いなく噛み合い、${defender.name}へ${severity}刃を通した。`;
   }
   if (advantage > 0) {
-    return `${attacker.name}は${action}。完全な直撃ではないが、${defender.name}の構えを崩しつつ傷を刻む。`;
+    return `${techniqueLead} 完全な直撃ではないが、${defender.name}の構えを崩しつつ傷を刻む。`;
   }
-  return `${attacker.name}は${action}。だが${defender.name}も反応し、致命には届かないまま火花だけが散った。`;
+  return `${techniqueLead} だが${defender.name}も反応し、致命には届かないまま火花だけが散った。`;
 }
 
-function keywordScore(action, attacker) {
+function keywordScore(action, attacker, triggeredTechnique = null) {
   let score = 0;
   if (action.includes("影") && attacker.ability.includes("影")) score += 10;
   if ((action.includes("氷") || action.includes("凍")) && attacker.ability.includes("氷")) score += 10;
   if (action.includes("高速") || action.includes("背後") || action.includes("回り込")) score += attacker.stats.spd * 0.08;
   if (action.includes("観察") || action.includes("読む") || action.includes("解析")) score += attacker.stats.mind * 0.08;
   if (action.includes("守") || action.includes("庇う")) score += attacker.stats.mind * 0.06;
+  if (triggeredTechnique) score += 6;
   return score;
 }
 
@@ -1493,6 +1709,19 @@ function updateCharacter(id, newCharacter) {
   });
 }
 
+function makeTechnique(overrides = {}) {
+  return {
+    id: overrides.id || createId(),
+    name: overrides.name || "",
+    type: overrides.type || "",
+    aliases: overrides.aliases || "",
+    staminaCost: Number(overrides.staminaCost) || 0,
+    power: Number(overrides.power) || 0,
+    effect: overrides.effect || "",
+    description: overrides.description || "",
+  };
+}
+
 function buildNewCustomCharacter() {
   state.customCharacterCount = (state.customCharacterCount || 0) + 1;
   const number = state.customCharacterCount;
@@ -1543,9 +1772,117 @@ function buildBaseCustomCharacterFields(overrides = {}) {
     defeatStyle: "",
     victoryStyle: "",
     notes: "ここに設定メモを書けます。",
+    techniques: [],
     stats: { atk: 60, spd: 60, mind: 60, charm: 60 },
     ...overrides,
   };
+}
+
+function detectTriggeredTechnique(action, character) {
+  const actionNormalized = normalizeTechniqueText(action);
+  if (!actionNormalized || !character.techniques.length) {
+    return null;
+  }
+
+  let bestMatch = null;
+
+  character.techniques.forEach((technique) => {
+    const candidates = [
+      { text: technique.name, source: "exact-name" },
+      ...splitTechniqueAliases(technique.aliases).map((alias) => ({ text: alias, source: "alias" })),
+      ...extractTechniqueHintPhrases(technique.effect).map((phrase) => ({ text: phrase, source: "effect" })),
+      ...extractTechniqueHintPhrases(technique.description).map((phrase) => ({ text: phrase, source: "description" })),
+    ].filter((item) => item.text);
+
+    candidates.forEach((candidate) => {
+      const candidateNormalized = normalizeTechniqueText(candidate.text);
+      if (!candidateNormalized || candidateNormalized.length < 2) {
+        return;
+      }
+
+      let score = 0;
+      let matchedBy = candidate.source;
+      if (actionNormalized.includes(candidateNormalized)) {
+        score = candidate.source === "exact-name" ? 20 : 18;
+      } else if (isOrderedSubsequence(candidateNormalized, actionNormalized)) {
+        score = candidate.source === "exact-name" ? 15 : 12;
+        matchedBy = `${candidate.source}-subsequence`;
+      } else {
+        const overlap = keywordOverlapScore(actionNormalized, candidateNormalized);
+        if (overlap >= 2) {
+          score = overlap * 3;
+          matchedBy = `${candidate.source}-overlap`;
+        }
+      }
+
+      if (!score) {
+        return;
+      }
+
+      if (!bestMatch || score > bestMatch.matchScore) {
+        bestMatch = {
+          technique,
+          matchedText: candidate.text,
+          matchedBy,
+          matchScore: score,
+        };
+      }
+    });
+  });
+
+  return bestMatch;
+}
+
+function calculateTechniqueSituationCost(action, technique, half, turn) {
+  let extraCost = 0;
+  if (half === "back") extraCost += 2;
+  if (turn >= 4) extraCost += 1;
+  if (/全力|最大|一気に|連続|乱舞|叩き込|直撃/.test(action)) extraCost += 2;
+  if (/慎重|牽制|軽く|様子見/.test(action)) extraCost -= 1;
+  if (technique.power >= 8) extraCost += 1;
+  return clamp(extraCost, -1, 5);
+}
+
+function splitTechniqueAliases(value) {
+  return String(value || "")
+    .split(/[,\n、，／/]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function extractTechniqueHintPhrases(value) {
+  return String(value || "")
+    .split(/[。\n、，,／/・]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2);
+}
+
+function normalizeTechniqueText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[ァ-ヶ]/g, (match) => String.fromCharCode(match.charCodeAt(0) - 0x60))
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function isOrderedSubsequence(needle, haystack) {
+  let pointer = 0;
+  for (const char of haystack) {
+    if (char === needle[pointer]) {
+      pointer += 1;
+      if (pointer >= needle.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function keywordOverlapScore(actionNormalized, candidateNormalized) {
+  const fragments = [];
+  for (let index = 0; index < candidateNormalized.length - 1; index += 1) {
+    fragments.push(candidateNormalized.slice(index, index + 2));
+  }
+  return [...new Set(fragments)].filter((fragment) => actionNormalized.includes(fragment)).length;
 }
 
 function cleanupCharacterData(characterId) {
