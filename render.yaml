@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: oc-battle-link
+    runtime: node
+    buildCommand: ""
+    startCommand: npm start
+    envVars:
+      - key: COHERE_API_KEY
+        sync: false
+      - key: COHERE_MODEL_DEFAULT
+        value: command-r-plus-08-2024

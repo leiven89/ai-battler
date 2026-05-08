@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OC BATTLE LINK</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Original Character Relationship Battle Prototype</p>
+        <h1>OC BATTLE LINK</h1>
+        <p class="tagline">戦いは、関係を生む。</p>
+        <p class="intro">
+          キャラの勝敗だけでなく、台詞、記憶、感情、関係が残る
+          オリキャラバトル試作です。今回は Command R+ による演出生成、
+          詳細キャラシート、備考欄、キャラ画像アップロードまで入れています。
+        </p>
+      </div>
+      <div class="hero-card">
+        <div class="mini-panel">
+          <span>Core Loop</span>
+          <strong>作る → 戦う → 覚える → 関係が変わる</strong>
+        </div>
+        <div class="mini-panel">
+          <span>AI Mode</span>
+          <strong id="hero-api-summary">サーバー接続待ち</strong>
+        </div>
+      </div>
+    </header>
+
+    <nav class="top-nav" aria-label="Primary">
+      <button class="nav-btn active" data-view="home">ホーム</button>
+      <button class="nav-btn" data-view="editor">キャラ編集</button>
+      <button class="nav-btn" data-view="battle">バトル</button>
+      <button class="nav-btn" data-view="relations">関係一覧</button>
+      <button class="nav-btn" data-view="memories">記憶ログ</button>
+    </nav>
+
+    <main>
+      <section class="view active" id="view-home">
+        <div class="panel-grid">
+          <article class="panel feature-panel">
+            <h2>この試作でできること</h2>
+            <ul class="feature-list">
+              <li>自由入力の行動とチャットカテゴリからバトル演出を生成</li>
+              <li>友情、因縁、尊敬、警戒の関係値を保存</li>
+              <li>前半 3 ターン、インターバル、後半 3 ターンの構成</li>
+              <li>戦後イベントと記憶ログで因縁や戦友関係を残す</li>
+              <li>キャラ画像、詳細設定、備考をローカル保存</li>
+            </ul>
+          </article>
+
+          <article class="panel">
+            <h2>Command R+ 設定</h2>
+            <form id="api-form" class="stack-form">
+              <label>
+                モデルID
+                <input type="text" name="model" placeholder="command-r-plus-08-2024">
+              </label>
+              <div class="two-col">
+                <label>
+                  Temperature
+                  <input type="number" name="temperature" min="0" max="2" step="0.1">
+                </label>
+                <label>
+                  Max Tokens
+                  <input type="number" name="maxTokens" min="200" max="4000" step="50">
+                </label>
+              </div>
+              <label class="inline-check">
+                <input type="checkbox" name="useApi">
+                バトル演出と台詞生成に Command R+ を使う
+              </label>
+              <div class="form-actions">
+                <button class="secondary-btn" type="button" id="test-api">接続テスト</button>
+                <button class="primary-btn" type="submit">API設定を保存</button>
+              </div>
+            </form>
+            <p class="helper-text" id="api-status">
+              公開時の API キーはブラウザではなく、サーバーの環境変数 `COHERE_API_KEY` に置いてください。
+            </p>
+          </article>
+
+          <article class="panel">
+            <h2>関係称号サンプル</h2>
+            <div class="badge-row" id="relationship-badges"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="view-editor">
+        <div class="panel">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Character Sheet</p>
+              <h2>キャラ編集</h2>
+            </div>
+            <div class="form-actions">
+              <button class="secondary-btn" type="button" id="create-character">新規キャラ追加</button>
+              <button class="secondary-btn" type="button" id="delete-character">このキャラを削除</button>
+              <button class="secondary-btn" type="button" id="reset-character">初期状態に戻す</button>
+            </div>
+          </div>
+
+          <form id="character-form" class="editor-grid">
+            <label class="wide">
+              編集対象
+              <select name="editorCharacterId" id="editor-character-select"></select>
+            </label>
+
+            <div class="image-card">
+              <div class="image-preview" id="character-image-preview">
+                <span>NO IMAGE</span>
+              </div>
+              <div class="image-actions">
+                <label class="upload-btn">
+                  画像をアップロード
+                  <input type="file" id="character-image-input" accept="image/*" hidden>
+                </label>
+                <button class="secondary-btn" type="button" id="remove-character-image">画像を削除</button>
+              </div>
+            </div>
+
+            <div class="profile-grid">
+              <label>
+                名前
+                <input type="text" name="name" required>
+              </label>
+              <label>
+                二つ名
+                <input type="text" name="title">
+              </label>
+              <label>
+                年齢
+                <input type="text" name="age">
+              </label>
+              <label>
+                性別
+                <input type="text" name="gender">
+              </label>
+              <label>
+                一人称
+                <input type="text" name="firstPerson">
+              </label>
+              <label>
+                二人称
+                <input type="text" name="secondPerson">
+              </label>
+              <label>
+                性格タイプ
+                <select name="archetype">
+                  <option value="cool">クール</option>
+                  <option value="tsundere">ツンデレ</option>
+                  <option value="gentle">優しい</option>
+                  <option value="rough">荒っぽい</option>
+                  <option value="proud">プライド高い</option>
+                </select>
+              </label>
+              <label>
+                所属
+                <input type="text" name="faction">
+              </label>
+            </div>
+
+            <label class="wide">
+              口調
+              <input type="text" name="tone">
+            </label>
+            <label class="wide">
+              性格の詳細
+              <textarea name="personality" rows="3"></textarea>
+            </label>
+            <label class="wide">
+              能力
+              <textarea name="ability" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              戦闘スタイル
+              <textarea name="style" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              弱点
+              <textarea name="weakness" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              奥義
+              <input type="text" name="ultimate">
+            </label>
+            <label class="wide">
+              出身・背景
+              <textarea name="origin" rows="2"></textarea>
+            </label>
+
+            <div class="profile-grid wide">
+              <label>
+                好きなもの
+                <input type="text" name="likes">
+              </label>
+              <label>
+                苦手なもの
+                <input type="text" name="dislikes">
+              </label>
+              <label>
+                趣味
+                <input type="text" name="hobbies">
+              </label>
+              <label>
+                仕草・癖
+                <input type="text" name="mannerisms">
+              </label>
+            </div>
+
+            <label class="wide">
+              好きな言い回し
+              <input type="text" name="favoritePhrase">
+            </label>
+            <label class="wide">
+              嫌いな言い回し
+              <input type="text" name="hatedPhrase">
+            </label>
+            <label class="wide">
+              怒った時の反応
+              <textarea name="angerReaction" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              褒められた時の反応
+              <textarea name="praiseReaction" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              挑発された時の反応
+              <textarea name="tauntReaction" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              感謝する時の言い方
+              <textarea name="gratitudeStyle" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              敗北時の態度
+              <textarea name="defeatStyle" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              勝利時の態度
+              <textarea name="victoryStyle" rows="2"></textarea>
+            </label>
+            <label class="wide">
+              備考
+              <textarea name="notes" rows="4" placeholder="設定メモ、裏設定、関係の方針、口調メモなど"></textarea>
+            </label>
+
+            <div class="stat-group">
+              <h3>ステータス</h3>
+              <label>ATK <input type="range" min="20" max="100" name="atk"></label>
+              <label>SPD <input type="range" min="20" max="100" name="spd"></label>
+              <label>MIND <input type="range" min="20" max="100" name="mind"></label>
+              <label>CHARM <input type="range" min="20" max="100" name="charm"></label>
+            </div>
+
+            <div class="preview-card" id="character-preview"></div>
+
+            <div class="form-actions wide">
+              <button class="primary-btn" type="submit">キャラ設定を保存</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="view" id="view-battle">
+        <div class="battle-layout">
+          <aside class="panel roster-panel">
+            <h2>対戦相手</h2>
+            <div id="enemy-roster" class="enemy-roster"></div>
+            <button class="primary-btn block-btn" id="start-battle">バトル開始</button>
+            <div class="battle-meta" id="battle-meta"></div>
+          </aside>
+
+          <section class="panel arena-panel">
+            <div class="arena-header">
+              <div id="player-card" class="fighter-card"></div>
+              <div class="versus">VS</div>
+              <div id="enemy-card" class="fighter-card"></div>
+            </div>
+
+            <div class="interval-banner hidden" id="interval-banner">
+              <p>前半終了。ここでの一言が後半の空気を変える。</p>
+              <div class="interval-actions" id="interval-actions"></div>
+            </div>
+
+            <div class="panel battle-log-panel">
+              <div class="section-header compact">
+                <div>
+                  <p class="eyebrow">Battle Log</p>
+                  <h2>ログ</h2>
+                </div>
+                <div class="battle-log-meta">
+                  <span class="heat-meter" id="heat-meter">HEAT 0</span>
+                  <span class="helper-text" id="battle-ai-mode">ローカル演出</span>
+                </div>
+              </div>
+              <div id="battle-log" class="battle-log"></div>
+            </div>
+
+            <form id="battle-form" class="battle-form">
+              <label class="wide">
+                行動入力
+                <textarea name="action" rows="3" placeholder="例：影の羽で視界を奪い、横から斬り込む"></textarea>
+              </label>
+              <label>
+                チャットカテゴリ
+                <select name="chatCategory">
+                  <option value="greeting">挨拶</option>
+                  <option value="taunt">挑発</option>
+                  <option value="resolve">意気込み</option>
+                  <option value="thanks">感謝</option>
+                  <option value="praise">賞賛</option>
+                  <option value="apology">謝罪</option>
+                  <option value="concern">心配</option>
+                  <option value="rematch">再戦要求</option>
+                </select>
+              </label>
+              <label class="inline-check">
+                <input type="checkbox" name="useChat" checked>
+                このターンでチャットも使う
+              </label>
+              <div class="form-actions wide">
+                <button class="primary-btn" type="submit" id="battle-submit">行動する</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-relations">
+        <div class="panel">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Character Bonds</p>
+              <h2>関係一覧</h2>
+            </div>
+          </div>
+          <div id="relations-list" class="relations-list"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-memories">
+        <div class="panel">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Memory Archive</p>
+              <h2>記憶ログ</h2>
+            </div>
+          </div>
+          <div id="memories-list" class="memories-list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

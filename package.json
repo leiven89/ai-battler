@@ -1,0 +1,12 @@
+{
+  "name": "oc-battle-link",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OC BATTLE LINK secure publishable prototype",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
