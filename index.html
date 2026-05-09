@@ -102,10 +102,12 @@
             </div>
             <div class="form-actions">
               <button class="secondary-btn" type="button" id="create-character">新規キャラ追加</button>
+              <button class="secondary-btn" type="button" id="publish-character">このキャラを公開する</button>
               <button class="secondary-btn" type="button" id="delete-character">このキャラを削除</button>
               <button class="secondary-btn" type="button" id="reset-character">初期状態に戻す</button>
             </div>
           </div>
+          <p class="helper-text" id="community-status">公開ステータス: まだ共有していません</p>
 
           <form id="character-form" class="editor-grid">
             <label class="wide">
@@ -459,8 +461,13 @@
                 親の入力
                 <textarea id="charaverse-raw-input" name="rawInput" rows="5" placeholder="例：今日はカレーを作った。うまくできておいしかった。"></textarea>
               </label>
+              <label class="inline-check">
+                <input type="checkbox" id="charaverse-share-public" name="sharePublic">
+                キャラバースを公開する
+              </label>
               <div class="form-actions">
                 <button class="secondary-btn" type="button" id="charaverse-reroll">もう一度生成</button>
+                <button class="secondary-btn" type="button" id="charaverse-refresh-community">みんなの投稿を更新</button>
                 <button class="primary-btn" type="submit" id="charaverse-post">投稿する</button>
               </div>
             </form>
@@ -473,7 +480,11 @@
                 <p class="eyebrow">Timeline</p>
                 <h2>タイムライン</h2>
               </div>
+              <div class="form-actions">
+                <button class="secondary-btn" type="button" id="charaverse-refresh-community-inline">更新</button>
+              </div>
             </div>
+            <p class="helper-text" id="community-feed-status">公開投稿: 読み込み前</p>
             <div id="charaverse-timeline" class="charaverse-timeline"></div>
           </article>
         </div>

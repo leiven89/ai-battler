@@ -8,6 +8,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
 const COHERE_CHAT_URL = "https://api.cohere.com/v2/chat";
 const DEFAULT_MODEL = process.env.COHERE_MODEL_DEFAULT || "command-r-plus-08-2024";
+const COMMUNITY_FILE = path.join(ROOT, "community-data.json");
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -38,6 +39,18 @@ const server = http.createServer(async (req, res) => {
         hasApiKey: Boolean(process.env.COHERE_API_KEY),
         model: DEFAULT_MODEL,
       });
+    }
+
+    if (req.method === "GET" && req.url === "/api/community") {
+      return handleCommunitySnapshot(res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/community/character/publish") {
+      return await handleCommunityCharacterPublish(req, res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/community/post/publish") {
+      return await handleCommunityPostPublish(req, res);
     }
 
     return serveStatic(req, res);
@@ -157,6 +170,87 @@ async function handleCohereTest(req, res) {
   });
 }
 
+function handleCommunitySnapshot(res) {
+  const store = readCommunityStore();
+  return sendJson(res, 200, {
+    ok: true,
+    updatedAt: store.updatedAt,
+    characters: store.characters,
+    posts: store.posts,
+  });
+}
+
+async function handleCommunityCharacterPublish(req, res) {
+  const body = await readJsonBody(req);
+  const profileId = normalizeText(body.profileId);
+  const profileName = normalizeText(body.profileName) || "匿名オーナー";
+  const character = body.character && typeof body.character === "object" ? body.character : null;
+
+  if (!profileId || !character) {
+    return sendJson(res, 400, { message: "profileId と character が必要です" });
+  }
+
+  const normalizedCharacter = normalizeCommunityCharacter(character);
+  if (!normalizedCharacter.id || !normalizedCharacter.name) {
+    return sendJson(res, 400, { message: "公開キャラには id と name が必要です" });
+  }
+
+  const store = readCommunityStore();
+  const existingIndex = store.characters.findIndex((entry) =>
+    entry.profileId === profileId && entry.sourceCharacterId === normalizedCharacter.id
+  );
+  const now = new Date().toISOString();
+  const nextEntry = {
+    id: existingIndex >= 0 ? store.characters[existingIndex].id : createServerId("char"),
+    profileId,
+    profileName,
+    sourceCharacterId: normalizedCharacter.id,
+    publishedAt: now,
+    character: normalizedCharacter,
+  };
+
+  if (existingIndex >= 0) {
+    store.characters[existingIndex] = nextEntry;
+  } else {
+    store.characters.unshift(nextEntry);
+  }
+
+  store.updatedAt = now;
+  writeCommunityStore(store);
+  return sendJson(res, 200, { ok: true, entry: nextEntry });
+}
+
+async function handleCommunityPostPublish(req, res) {
+  const body = await readJsonBody(req);
+  const profileId = normalizeText(body.profileId);
+  const profileName = normalizeText(body.profileName) || "匿名オーナー";
+  const post = body.post && typeof body.post === "object" ? body.post : null;
+
+  if (!profileId || !post) {
+    return sendJson(res, 400, { message: "profileId と post が必要です" });
+  }
+
+  const normalizedPost = normalizeCommunityPost(post);
+  if (!normalizedPost.authorSnapshot?.name || !normalizedPost.postText) {
+    return sendJson(res, 400, { message: "公開投稿には authorSnapshot.name と postText が必要です" });
+  }
+
+  const store = readCommunityStore();
+  const nextEntry = {
+    id: createServerId("post"),
+    profileId,
+    profileName,
+    publishedAt: new Date().toISOString(),
+    ...normalizedPost,
+  };
+
+  store.posts.unshift(nextEntry);
+  store.posts = store.posts.slice(0, 200);
+  store.updatedAt = nextEntry.publishedAt;
+  writeCommunityStore(store);
+  return sendJson(res, 200, { ok: true, entry: nextEntry });
+}
+
 function serveStatic(req, res) {
   const requestPath = req.url === "/" ? "/index.html" : req.url;
   const safePath = path.normalize(decodeURIComponent(requestPath)).replace(/^(\.\.[/\\])+/, "");
@@ -227,6 +321,119 @@ function clampNumber(value, min, max, fallback) {
 
 function extractCohereError(payload) {
   return payload?.message || payload?.error?.message || payload?.error || "";
+}
+
+function readCommunityStore() {
+  if (!fs.existsSync(COMMUNITY_FILE)) {
+    const initial = { updatedAt: new Date().toISOString(), characters: [], posts: [] };
+    fs.writeFileSync(COMMUNITY_FILE, JSON.stringify(initial, null, 2), "utf8");
+    return initial;
+  }
+
+  try {
+    const text = fs.readFileSync(COMMUNITY_FILE, "utf8");
+    const parsed = JSON.parse(text);
+    return {
+      updatedAt: parsed.updatedAt || new Date().toISOString(),
+      characters: Array.isArray(parsed.characters) ? parsed.characters : [],
+      posts: Array.isArray(parsed.posts) ? parsed.posts : [],
+    };
+  } catch (_error) {
+    return { updatedAt: new Date().toISOString(), characters: [], posts: [] };
+  }
+}
+
+function writeCommunityStore(store) {
+  fs.writeFileSync(COMMUNITY_FILE, JSON.stringify(store, null, 2), "utf8");
+}
+
+function normalizeCommunityCharacter(character) {
+  return {
+    id: normalizeText(character.id),
+    name: normalizeText(character.name),
+    title: normalizeText(character.title),
+    age: normalizeText(character.age),
+    gender: normalizeText(character.gender),
+    firstPerson: normalizeText(character.firstPerson),
+    secondPerson: normalizeText(character.secondPerson),
+    archetype: normalizeText(character.archetype) || "cool",
+    faction: normalizeText(character.faction),
+    tone: normalizeText(character.tone),
+    personality: normalizeText(character.personality),
+    ability: normalizeText(character.ability),
+    style: normalizeText(character.style),
+    weakness: normalizeText(character.weakness),
+    ultimate: normalizeText(character.ultimate),
+    origin: normalizeText(character.origin),
+    likes: normalizeText(character.likes),
+    dislikes: normalizeText(character.dislikes),
+    hobbies: normalizeText(character.hobbies),
+    mannerisms: normalizeText(character.mannerisms),
+    favoritePhrase: normalizeText(character.favoritePhrase),
+    hatedPhrase: normalizeText(character.hatedPhrase),
+    angerReaction: normalizeText(character.angerReaction),
+    praiseReaction: normalizeText(character.praiseReaction),
+    tauntReaction: normalizeText(character.tauntReaction),
+    gratitudeStyle: normalizeText(character.gratitudeStyle),
+    defeatStyle: normalizeText(character.defeatStyle),
+    victoryStyle: normalizeText(character.victoryStyle),
+    notes: normalizeText(character.notes),
+    imageDataUrl: normalizeImageDataUrl(character.imageDataUrl),
+    techniques: Array.isArray(character.techniques)
+      ? character.techniques.slice(0, 20).map((technique) => ({
+          id: normalizeText(technique.id) || createServerId("tech"),
+          name: normalizeText(technique.name),
+          type: normalizeText(technique.type),
+          aliases: normalizeText(technique.aliases),
+          staminaCost: clampNumber(technique.staminaCost, 0, 99, 0),
+          power: clampNumber(technique.power, 0, 99, 0),
+          effect: normalizeText(technique.effect),
+          description: normalizeText(technique.description),
+        }))
+      : [],
+    stats: {
+      atk: clampNumber(character?.stats?.atk, 20, 100, 60),
+      spd: clampNumber(character?.stats?.spd, 20, 100, 60),
+      mind: clampNumber(character?.stats?.mind, 20, 100, 60),
+      charm: clampNumber(character?.stats?.charm, 20, 100, 60),
+    },
+  };
+}
+
+function normalizeCommunityPost(post) {
+  const tags = Array.isArray(post.tags)
+    ? post.tags.map((tag) => normalizeText(tag)).filter(Boolean).slice(0, 8)
+    : [];
+  return {
+    genre: normalizeText(post.genre) || "daily",
+    mood: normalizeText(post.mood) || "bright",
+    postText: normalizeText(post.postText),
+    rawInput: normalizeText(post.rawInput),
+    tags,
+    timestamp: normalizeText(post.timestamp) || new Date().toISOString(),
+    authorId: normalizeText(post.authorId),
+    authorSnapshot: {
+      id: normalizeText(post?.authorSnapshot?.id),
+      name: normalizeText(post?.authorSnapshot?.name),
+      title: normalizeText(post?.authorSnapshot?.title),
+      archetype: normalizeText(post?.authorSnapshot?.archetype) || "cool",
+      tone: normalizeText(post?.authorSnapshot?.tone),
+      faction: normalizeText(post?.authorSnapshot?.faction),
+      imageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.imageDataUrl),
+    },
+  };
+}
+
+function normalizeImageDataUrl(value) {
+  const text = normalizeText(value);
+  if (!text.startsWith("data:image/")) {
+    return "";
+  }
+  return text.slice(0, 600_000);
+}
+
+function createServerId(prefix) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function loadEnvFile(filePath) {

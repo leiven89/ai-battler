@@ -3,6 +3,9 @@ const DEFAULT_MODEL = "command-r-plus-08-2024";
 const SAMPLE_CHARACTER_IDS = new Set(["player", "eira", "shino", "sera"]);
 const INTERNAL_CHAT_URL = "/api/cohere/chat";
 const INTERNAL_TEST_URL = "/api/cohere/test";
+const COMMUNITY_SNAPSHOT_URL = "/api/community";
+const COMMUNITY_PUBLISH_CHARACTER_URL = "/api/community/character/publish";
+const COMMUNITY_PUBLISH_POST_URL = "/api/community/post/publish";
 
 const relationshipLabels = [
   "初対面",
@@ -351,6 +354,10 @@ const defaultState = {
     apiStatus: "サーバー側 Command R+ 未接続",
   },
   customCharacterCount: 0,
+  communityProfileId: `profile-${createId()}`,
+  communityProfileName: "匿名オーナー",
+  communityStatus: "公開ステータス: まだ共有していません",
+  communityFeedStatus: "公開投稿: 読み込み前",
   editorCharacterId: "player",
   editorTechniqueIndex: -1,
   selectedEnemyId: "eira",
@@ -422,8 +429,11 @@ const defaultState = {
     authorId: "player",
     genre: "daily",
     mood: "bright",
+    sharePublic: false,
   },
   charaversePosts: [],
+  communityCharacters: [],
+  communityPosts: [],
   chatMeta: {},
   battle: null,
 };
@@ -452,8 +462,10 @@ const elements = {
   clearTechnique: document.getElementById("clear-technique"),
   saveTechnique: document.getElementById("save-technique"),
   createCharacter: document.getElementById("create-character"),
+  publishCharacter: document.getElementById("publish-character"),
   deleteCharacter: document.getElementById("delete-character"),
   resetCharacter: document.getElementById("reset-character"),
+  communityStatus: document.getElementById("community-status"),
   characterImagePreview: document.getElementById("character-image-preview"),
   characterImageInput: document.getElementById("character-image-input"),
   removeCharacterImage: document.getElementById("remove-character-image"),
@@ -483,8 +495,12 @@ const elements = {
   charaverseGenreSelect: document.getElementById("charaverse-genre-select"),
   charaverseMoodSelect: document.getElementById("charaverse-mood-select"),
   charaverseRawInput: document.getElementById("charaverse-raw-input"),
+  charaverseSharePublic: document.getElementById("charaverse-share-public"),
   charaverseReroll: document.getElementById("charaverse-reroll"),
+  charaverseRefreshCommunity: document.getElementById("charaverse-refresh-community"),
+  charaverseRefreshCommunityInline: document.getElementById("charaverse-refresh-community-inline"),
   charaversePreview: document.getElementById("charaverse-preview"),
+  communityFeedStatus: document.getElementById("community-feed-status"),
   charaverseTimeline: document.getElementById("charaverse-timeline"),
   relationsList: document.getElementById("relations-list"),
   memoriesList: document.getElementById("memories-list"),
@@ -501,6 +517,7 @@ function init() {
   bindCharaverse();
   renderRelationshipBadges();
   renderAll();
+  void syncCommunitySnapshot();
 }
 
 function bindNavigation() {
@@ -560,6 +577,10 @@ function bindCharacterEditor() {
     state.selectedEnemyId = newCharacter.id;
     saveState();
     renderAll();
+  });
+
+  elements.publishCharacter.addEventListener("click", async () => {
+    await publishCurrentCharacter();
   });
 
   elements.deleteCharacter.addEventListener("click", () => {
@@ -774,8 +795,21 @@ function bindCharaverse() {
     renderCharaversePreview();
   });
 
+  elements.charaverseSharePublic.addEventListener("change", () => {
+    state.charaverseComposer.sharePublic = elements.charaverseSharePublic.checked;
+    saveState();
+  });
+
   elements.charaverseReroll.addEventListener("click", async () => {
     await renderCharaversePreview(true);
+  });
+
+  elements.charaverseRefreshCommunity.addEventListener("click", async () => {
+    await syncCommunitySnapshot(true);
+  });
+
+  elements.charaverseRefreshCommunityInline.addEventListener("click", async () => {
+    await syncCommunitySnapshot(true);
   });
 
   elements.charaverseForm.addEventListener("submit", async (event) => {
@@ -823,11 +857,17 @@ function renderAll() {
   fillChatParticipants();
   renderRelationshipChat();
   fillCharaverseComposer();
+  renderCommunityStatus();
   renderCharaversePreview();
   renderCharaverseTimeline();
   renderRelations();
   renderMemories();
   renderHeroSummary();
+}
+
+function renderCommunityStatus() {
+  elements.communityStatus.textContent = state.communityStatus || "公開ステータス: 未設定";
+  elements.communityFeedStatus.textContent = state.communityFeedStatus || "公開投稿: 未取得";
 }
 
 function renderHeroSummary() {
@@ -1058,9 +1098,9 @@ function saveTechniqueFromEditor() {
 }
 
 function renderEnemyRoster() {
-  const enemies = state.characters.filter((character) => character.id !== "player");
+  const enemies = getBattleOpponents();
   elements.battleEnemySelect.innerHTML = enemies
-    .map((enemy) => `<option value="${escapeHtml(enemy.id)}">${escapeHtml(enemy.name)}</option>`)
+    .map((enemy) => `<option value="${escapeHtml(enemy.id)}">${escapeHtml(enemy.name)}${enemy.isCommunity ? " [公開]" : ""}</option>`)
     .join("");
   elements.battleEnemySelect.value = state.selectedEnemyId;
 
@@ -1071,7 +1111,7 @@ function renderEnemyRoster() {
       return `
         <button class="enemy-option ${selectedClass}" data-enemy-id="${escapeHtml(enemy.id)}">
           <strong>${escapeHtml(enemy.name)}</strong>
-          <div>${escapeHtml(enemy.title || enemy.ability)}</div>
+          <div>${escapeHtml(enemy.title || enemy.ability)}${enemy.isCommunity ? ` / 公開元 ${escapeHtml(enemy.profileName || "匿名オーナー")}` : ""}</div>
           <small>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry}</small>
         </button>
       `;
@@ -1248,6 +1288,7 @@ function fillCharaverseComposer() {
   elements.charaverseAuthorSelect.value = state.charaverseComposer.authorId;
   elements.charaverseGenreSelect.value = state.charaverseComposer.genre;
   elements.charaverseMoodSelect.value = state.charaverseComposer.mood;
+  elements.charaverseSharePublic.checked = Boolean(state.charaverseComposer.sharePublic);
 }
 
 async function renderCharaversePreview(forceAi = false) {
@@ -1294,7 +1335,7 @@ async function renderCharaversePreview(forceAi = false) {
 }
 
 function renderCharaverseTimeline() {
-  const posts = [...(state.charaversePosts || [])].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const posts = [...getMergedCharaversePosts()].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   if (!posts.length) {
     elements.charaverseTimeline.innerHTML = `<div class="charaverse-post-card"><strong>まだ投稿がありません</strong><div>最初のキャラバース投稿を作ると、ここにキャラたちの生活が流れ始めます。</div></div>`;
     return;
@@ -1306,7 +1347,8 @@ function renderCharaverseTimeline() {
 }
 
 function renderCharaversePost(post) {
-  const author = getCharacter(post.authorId);
+  const author = getCharacter(post.authorId) || post.authorSnapshot || null;
+  const isCommunityPost = post.scope === "community";
   const participantOptions = state.characters
     .filter((character) => character.id !== post.authorId)
     .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
@@ -1330,30 +1372,38 @@ function renderCharaversePost(post) {
     .join("");
 
   return `
-    <article class="charaverse-post-card">
+    <article class="charaverse-post-card ${isCommunityPost ? "community" : ""}">
       <div class="charaverse-post-head">
         <strong>${escapeHtml(author?.name || "不明")}</strong>
         <span class="badge">${escapeHtml(resolveCharaverseLabel(post.genre))}</span>
+        <span class="community-pill">${isCommunityPost ? "PUBLIC" : "LOCAL"}</span>
         <span class="memory-meta">${escapeHtml(formatTimeOnly(post.timestamp))}</span>
       </div>
+      ${isCommunityPost ? `<div class="community-readonly">公開元: ${escapeHtml(post.profileName || "匿名オーナー")}</div>` : ""}
       <div>${escapeHtml(post.postText)}</div>
       <div class="charaverse-post-meta">
         ${(post.tags || []).map((tag) => `<span class="charaverse-tag">#${escapeHtml(tag)}</span>`).join("")}
       </div>
-      <div class="charaverse-actions">
-        <select class="charaverse-inline-select" data-charaverse-actor="${escapeHtml(post.id)}">
-          ${participantOptions}
-        </select>
-        <button class="secondary-btn" type="button" data-charaverse-like="${escapeHtml(post.id)}">いいねする</button>
-        <button class="secondary-btn" type="button" data-charaverse-delete="${escapeHtml(post.id)}">投稿を削除</button>
-      </div>
-      ${reactions ? `<div class="charaverse-reactions">${reactions}</div>` : ""}
-      <div class="charaverse-comment-box">
-        <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この投稿へのコメント内容"></textarea>
-        <div class="charaverse-manual-tools">
-          <button class="primary-btn" type="button" data-charaverse-comment="${escapeHtml(post.id)}">コメント送信</button>
+      ${isCommunityPost ? `
+        <div class="community-readonly">この投稿は公開タイムラインから読めます。バトルや続きの交流は公開キャラ側からつながります。</div>
+      ` : `
+        <div class="charaverse-actions">
+          <select class="charaverse-inline-select" data-charaverse-actor="${escapeHtml(post.id)}">
+            ${participantOptions}
+          </select>
+          <button class="secondary-btn" type="button" data-charaverse-like="${escapeHtml(post.id)}">いいねする</button>
+          <button class="secondary-btn" type="button" data-charaverse-delete="${escapeHtml(post.id)}">投稿を削除</button>
         </div>
-      </div>
+      `}
+      ${reactions ? `<div class="charaverse-reactions">${reactions}</div>` : ""}
+      ${isCommunityPost ? "" : `
+        <div class="charaverse-comment-box">
+          <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この投稿へのコメント内容"></textarea>
+          <div class="charaverse-manual-tools">
+            <button class="primary-btn" type="button" data-charaverse-comment="${escapeHtml(post.id)}">コメント送信</button>
+          </div>
+        </div>
+      `}
       ${comments ? `<div class="charaverse-comments">${comments}</div>` : ""}
     </article>
   `;
@@ -1365,6 +1415,7 @@ async function createCharaversePost() {
   const rawInput = String(elements.charaverseRawInput.value || "").trim();
   const genre = elements.charaverseGenreSelect.value || state.charaverseComposer.genre;
   const mood = elements.charaverseMoodSelect.value || state.charaverseComposer.mood;
+  const sharePublic = elements.charaverseSharePublic.checked;
 
   if (!author || !rawInput) {
     return;
@@ -1385,7 +1436,9 @@ async function createCharaversePost() {
 
   const post = {
     id: createId(),
+    scope: "local",
     authorId: author.id,
+    authorSnapshot: buildPostAuthorSnapshot(author),
     genre,
     mood,
     rawInput,
@@ -1402,9 +1455,141 @@ async function createCharaversePost() {
   state.charaversePosts = state.charaversePosts.slice(0, 40);
   saveMemory(author.id, `キャラバース投稿: ${author.name}`, `${author.name}が「${resolveCharaverseLabel(genre)}」の投稿をした。`);
   elements.charaverseRawInput.value = "";
+  state.charaverseComposer.sharePublic = sharePublic;
+
+  if (sharePublic) {
+    await publishCharaversePost(post, author);
+  }
+
   saveState();
   renderAll();
   switchView("charaverse");
+}
+
+function buildPostAuthorSnapshot(character) {
+  return {
+    id: character.id,
+    name: character.name,
+    title: character.title,
+    archetype: character.archetype,
+    tone: character.tone,
+    faction: character.faction,
+    imageDataUrl: character.imageDataUrl || "",
+  };
+}
+
+function getMergedCharaversePosts() {
+  return [
+    ...(state.charaversePosts || []).map((post) => ({ ...post, scope: post.scope || "local" })),
+    ...(state.communityPosts || []).map((post) => ({ ...post, scope: "community" })),
+  ];
+}
+
+function buildCommunityCharacter(entry) {
+  return makeCharacter({
+    ...(entry.character || {}),
+    id: `community:${entry.id}`,
+    sourceCharacterId: entry.sourceCharacterId,
+    communityEntryId: entry.id,
+    profileId: entry.profileId,
+    profileName: entry.profileName,
+    publishedAt: entry.publishedAt,
+    isCommunity: true,
+  });
+}
+
+function buildCommunityPost(entry) {
+  return {
+    id: `community:${entry.id}`,
+    scope: "community",
+    profileId: entry.profileId,
+    profileName: entry.profileName,
+    publishedAt: entry.publishedAt,
+    authorId: entry.authorId ? `community-post-author:${entry.id}:${entry.authorId}` : "",
+    authorSnapshot: entry.authorSnapshot || null,
+    genre: entry.genre || "daily",
+    mood: entry.mood || "bright",
+    rawInput: entry.rawInput || "",
+    postText: entry.postText || "",
+    tags: entry.tags || [],
+    timestamp: entry.timestamp || entry.publishedAt || new Date().toISOString(),
+    reactions: [],
+    comments: [],
+  };
+}
+
+async function syncCommunitySnapshot(showSuccess = false) {
+  try {
+    const payload = await fetchJson(COMMUNITY_SNAPSHOT_URL);
+    const remoteCharacters = (payload.characters || []).filter((entry) => entry.profileId !== state.communityProfileId);
+    const remotePosts = (payload.posts || []).filter((entry) => entry.profileId !== state.communityProfileId);
+    state.communityCharacters = remoteCharacters.map((entry) => buildCommunityCharacter(entry));
+    state.communityPosts = remotePosts.map((entry) => buildCommunityPost(entry));
+    state.communityFeedStatus = showSuccess || !state.communityFeedStatus || /読み込み前|失敗/.test(state.communityFeedStatus)
+      ? `公開投稿: ${state.communityPosts.length}件 / 公開キャラ: ${state.communityCharacters.length}体`
+      : state.communityFeedStatus;
+    saveState();
+    renderAll();
+  } catch (error) {
+    state.communityFeedStatus = `公開投稿の取得に失敗: ${error.message}`;
+    saveState();
+    renderCommunityStatus();
+  }
+}
+
+async function publishCurrentCharacter() {
+  const character = getEditorCharacter();
+  if (!character) {
+    return;
+  }
+
+  try {
+    await postJson(COMMUNITY_PUBLISH_CHARACTER_URL, {
+      profileId: state.communityProfileId,
+      profileName: getCommunityProfileName(),
+      character,
+    });
+    state.communityStatus = `${character.name} を公開しました`;
+    await syncCommunitySnapshot(true);
+    saveState();
+    renderAll();
+  } catch (error) {
+    state.communityStatus = `公開失敗: ${error.message}`;
+    saveState();
+    renderCommunityStatus();
+  }
+}
+
+async function publishCharaversePost(post, author) {
+  try {
+    await postJson(COMMUNITY_PUBLISH_POST_URL, {
+      profileId: state.communityProfileId,
+      profileName: getCommunityProfileName(),
+      post: {
+        authorId: author.id,
+        authorSnapshot: buildPostAuthorSnapshot(author),
+        genre: post.genre,
+        mood: post.mood,
+        rawInput: post.rawInput,
+        postText: post.postText,
+        tags: post.tags,
+        timestamp: post.timestamp,
+      },
+    });
+    state.communityStatus = `${author.name} の投稿を公開しました`;
+    await syncCommunitySnapshot(true);
+  } catch (error) {
+    state.communityStatus = `投稿の公開失敗: ${error.message}`;
+  }
+}
+
+function getCommunityProfileName() {
+  if (state.communityProfileName && state.communityProfileName !== "匿名オーナー") {
+    return state.communityProfileName;
+  }
+  const player = getPlayer();
+  state.communityProfileName = `${player?.name || "匿名"}の親`;
+  return state.communityProfileName;
 }
 
 function getCharaversePost(postId) {
@@ -2126,7 +2311,7 @@ function renderIntervalChoices() {
 }
 
 function renderRelations() {
-  const enemies = state.characters.filter((character) => character.id !== "player");
+  const enemies = getBattleOpponents();
   elements.relationsList.innerHTML = enemies
     .map((enemy) => {
       const relation = getRelation("player", enemy.id);
@@ -2135,7 +2320,7 @@ function renderRelations() {
           <div class="section-header compact">
             <div>
               <h3>${escapeHtml(enemy.name)}</h3>
-              <p class="memory-meta">${escapeHtml(relation.title)}</p>
+              <p class="memory-meta">${escapeHtml(relation.title)}${enemy.isCommunity ? ` / 公開元 ${escapeHtml(enemy.profileName || "匿名オーナー")}` : ""}</p>
             </div>
             <span class="badge">${escapeHtml(resolveRelationshipTitle(relation))}</span>
           </div>
@@ -2203,6 +2388,7 @@ function renderFighterCard(character, battleState) {
         <p class="eyebrow">${escapeHtml(character.tone || "未設定")}</p>
         <h3>${escapeHtml(character.name)}</h3>
         <p>${escapeHtml(character.title || character.ability || "能力未設定")}</p>
+        ${character.isCommunity ? `<p class="memory-meta">公開元: ${escapeHtml(character.profileName || "匿名オーナー")}</p>` : ""}
         ${relation ? `<p><strong>関係:</strong> ${escapeHtml(relation.title)}</p>` : ""}
       </div>
     </div>
@@ -3348,7 +3534,7 @@ function ensureChatPairState() {
 }
 
 function ensureSelectedCharacterState() {
-  const enemies = state.characters.filter((character) => character.id !== "player");
+  const enemies = getBattleOpponents();
   const fallbackEnemy = enemies[0] || null;
 
   if (!getCharacter(state.selectedEnemyId) || state.selectedEnemyId === "player") {
@@ -3370,8 +3556,16 @@ function getEditorCharacter() {
   return getCharacter(state.editorCharacterId);
 }
 
+function getBattleOpponents() {
+  return [
+    ...state.characters.filter((character) => character.id !== "player"),
+    ...(state.communityCharacters || []),
+  ];
+}
+
 function getCharacter(id) {
-  return state.characters.find((character) => character.id === id);
+  return state.characters.find((character) => character.id === id)
+    || (state.communityCharacters || []).find((character) => character.id === id);
 }
 
 function updateCharacter(id, newCharacter) {
@@ -3682,6 +3876,30 @@ async function testServerApi(model) {
   return payload;
 }
 
+async function fetchJson(url) {
+  const response = await fetch(url);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
 async function resizeImageFile(file, maxSize = 640, quality = 0.84) {
   const dataUrl = await readFileAsDataUrl(file);
   const image = await loadImage(dataUrl);
@@ -3745,6 +3963,8 @@ function loadState() {
         ...(parsed.charaverseComposer || {}),
       },
       charaversePosts: parsed.charaversePosts || structuredClone(defaultState.charaversePosts),
+      communityCharacters: (parsed.communityCharacters || []).map((item) => makeCharacter(item)),
+      communityPosts: parsed.communityPosts || structuredClone(defaultState.communityPosts),
       chats: parsed.chats || structuredClone(defaultState.chats),
       battleRecords: parsed.battleRecords || structuredClone(defaultState.battleRecords),
       chatMeta: parsed.chatMeta || structuredClone(defaultState.chatMeta),

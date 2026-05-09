@@ -660,6 +660,11 @@ input[type="range"] {
   gap: 12px;
 }
 
+.charaverse-post-card.community {
+  border: 1px solid rgba(28, 79, 105, 0.18);
+  background: linear-gradient(180deg, rgba(210, 228, 238, 0.3), rgba(255, 255, 255, 0.88));
+}
+
 .charaverse-post-head,
 .charaverse-post-meta,
 .charaverse-reactions {
@@ -713,6 +718,21 @@ input[type="range"] {
   padding: 8px 10px;
   background: rgba(28, 79, 105, 0.08);
   font-size: 0.84rem;
+}
+
+.community-pill {
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(28, 79, 105, 0.12);
+  color: var(--accent-cold);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.community-readonly {
+  color: var(--muted);
+  font-size: 0.88rem;
 }
 
 .chat-contact {
