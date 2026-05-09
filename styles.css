@@ -1031,6 +1031,7 @@ input[type="range"] {
     linear-gradient(145deg, rgba(9, 23, 43, 0.92), rgba(5, 14, 29, 0.92)),
     radial-gradient(circle at top right, rgba(52, 211, 255, 0.18), transparent 34%);
   box-shadow: 0 22px 48px rgba(2, 9, 18, 0.28);
+  color: #f3fbff;
 }
 
 .charaverse-profile-hero {
@@ -1050,12 +1051,32 @@ input[type="range"] {
 .charaverse-profile-copy {
   display: grid;
   gap: 8px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: rgba(4, 14, 28, 0.36);
+  border: 1px solid rgba(108, 198, 255, 0.1);
+}
+
+.charaverse-profile-copy h3,
+.charaverse-profile-copy p,
+.charaverse-profile-copy .eyebrow {
+  margin: 0;
+}
+
+.charaverse-profile-copy h3 {
+  color: #f9fdff;
+}
+
+.charaverse-profile-copy p {
+  color: #d9ebf8;
+  line-height: 1.7;
 }
 
 .charaverse-profile-handle {
   color: #89d6ff;
   font-size: 0.95rem;
   letter-spacing: 0.04em;
+  font-weight: 700;
 }
 
 .charaverse-profile-actions {
@@ -1069,6 +1090,12 @@ input[type="range"] {
   margin-top: 18px;
   display: grid;
   gap: 16px;
+}
+
+.charaverse-profile-panel .charaverse-tag {
+  background: rgba(90, 196, 255, 0.16);
+  color: #ebf8ff;
+  border-color: rgba(90, 196, 255, 0.22);
 }
 
 .reply-context-pill {

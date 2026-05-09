@@ -2106,7 +2106,7 @@ async function handleCharaverseManualComment(postId) {
   const commenter = getCharacter(actorSelect?.value || "");
   const author = getPostAuthorCharacter(post);
   const rawInput = String(input?.value || "").trim();
-  if (!commenter || !author || !rawInput || commenter.id === author.id) return;
+  if (!commenter || !author || !rawInput) return;
 
   const relation = getRelation(commenter.id, author.id);
   let text = "";
@@ -4483,7 +4483,7 @@ async function handleCharaverseManualComment(postId) {
   const commenter = getCharacter(actorSelect?.value || "");
   const author = getPostAuthorCharacter(post);
   const rawInput = String(input?.value || "").trim();
-  if (!commenter || !author || !rawInput || commenter.id === author.id) return;
+  if (!commenter || !author || !rawInput) return;
 
   const relation = getRelation(commenter.id, author.id);
   let text = "";
