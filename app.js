@@ -393,6 +393,7 @@ const defaultState = {
       },
     ],
   },
+  chatMeta: {},
   battle: null,
 };
 
@@ -1104,7 +1105,9 @@ async function sendRelationshipChat(message, targetId) {
   const target = getCharacter(targetId);
   const relation = getRelation("player", targetId);
   const thread = getChatThread(targetId);
+  const chatMeta = getChatMeta(targetId);
   const delta = analyzeChatMessageEffect(message, relation);
+  const inferredTopic = inferConversationTopic(message, target);
 
   thread.push({
     id: createId(),
@@ -1124,6 +1127,8 @@ async function sendRelationshipChat(message, targetId) {
         relation,
         playerMessage: message,
         thread,
+        chatMeta,
+        inferredTopic,
       });
       state.settings.apiStatus = `会話生成成功: ${state.settings.model}`;
     } catch (error) {
@@ -1131,15 +1136,23 @@ async function sendRelationshipChat(message, targetId) {
     }
   }
 
+  const replyText = replyPayload?.reply || generateLocalRelationshipReply(target, relation, message, delta, chatMeta, inferredTopic);
   thread.push({
     id: createId(),
     sender: "character",
-    text: replyPayload?.reply || generateLocalRelationshipReply(target, relation, message, delta),
+    text: replyText,
     timestamp: new Date().toISOString(),
   });
 
   relation.lastMemory = replyPayload?.memoryHint || buildChatMemoryHint(target, delta);
   relation.title = resolveRelationshipTitle(relation);
+  updateChatMeta(targetId, {
+    userMessage: message,
+    replyText,
+    inferredTopic,
+    moveType: replyPayload?.moveType || "local",
+    nextHook: replyPayload?.nextHook || "",
+  });
   saveMemory(targetId, `会話: ${target.name}`, relation.lastMemory);
   saveState();
 }
@@ -1184,7 +1197,7 @@ function analyzeChatMessageEffect(message, relation) {
   return delta;
 }
 
-function generateLocalRelationshipReply(target, relation, message, delta) {
+function generateLocalRelationshipReply(target, relation, message, delta, chatMeta, inferredTopic) {
   const warm = relation.friendship >= 24;
   const hostile = relation.rivalry >= 24 || relation.caution >= 24;
   const respectful = relation.respect >= 18;
@@ -1192,62 +1205,64 @@ function generateLocalRelationshipReply(target, relation, message, delta) {
   const lastMemory = relation.lastMemory || "";
   const recentMemories = getRelevantMemories(target.id, 2);
   const recentThread = getChatThread(target.id).slice(-4).map((item) => item.text).join(" ");
+  const conversationMove = chooseLocalConversationMove(target, relation, chatMeta, inferredTopic);
+  const forwardHook = buildForwardHook(target, relation, inferredTopic, conversationMove);
 
   if (/この前|前に|さっき|前回/.test(message)) {
     if (lastMemory) {
-      return `覚えている。${lastMemory}……あの時のことを、まだ簡単には切り分けられない。`;
+      return `覚えている。${lastMemory}……あの時のことを、まだ簡単には切り分けられない。${forwardHook}`;
     }
   }
 
   if (recentMemories.some((memory) => /挑発|因縁|屈辱/.test(memory.body)) && delta.friendship > 0) {
-    return "今さら優しくされても、すぐに全部が変わるわけじゃない。でも……前よりは、ちゃんと聞く気がある。";
+    return `今さら優しくされても、すぐに全部が変わるわけじゃない。でも……前よりは、ちゃんと聞く気がある。${forwardHook}`;
   }
 
   if (recentThread && /ありがとう|助かった/.test(recentThread) && delta.friendship > 0) {
-    return "また礼を言うのね。そういう積み重ねは、嫌いじゃない。少しずつだけど、伝わってる。";
+    return `また礼を言うのね。そういう積み重ねは、嫌いじゃない。少しずつだけど、伝わってる。${forwardHook}`;
   }
 
   if (delta.friendship >= 2 && warm) {
-    if (target.archetype === "gentle") return "えへへ、そう言ってもらえると嬉しいな。あなたと話す時間、けっこう好きかも。";
-    if (target.archetype === "cool") return "そういう言葉は嫌いじゃない。今のやり取りは覚えておく。";
+    if (target.archetype === "gentle") return `えへへ、そう言ってもらえると嬉しいな。あなたと話す時間、けっこう好きかも。${forwardHook}`;
+    if (target.archetype === "cool") return `そういう言葉は嫌いじゃない。今のやり取りは覚えておく。${forwardHook}`;
   }
 
   if (delta.respect >= 2 && respectful) {
-    if (target.archetype === "proud") return "見る目はあるのね。そこまで言うなら、次はもっと高いところで受けて立つわ。";
-    return "その評価は軽く扱わない。次は言葉だけじゃなく、結果でも返そう。";
+    if (target.archetype === "proud") return `見る目はあるのね。そこまで言うなら、次はもっと高いところで受けて立つわ。${forwardHook}`;
+    return `その評価は軽く扱わない。次は言葉だけじゃなく、結果でも返そう。${forwardHook}`;
   }
 
   if (delta.rivalry >= 2 && hostile) {
-    if (target.archetype === "proud") return "その挑発、嫌いじゃないわ。なら次は本当に折りに行く。覚悟しておきなさい。";
-    if (target.archetype === "rough") return "いいじゃねぇか。そういう火花の方が、話してても熱くなる。";
-    return "また煽るのね。でも、そのくらいの火種がある方が次は面白い。";
+    if (target.archetype === "proud") return `その挑発、嫌いじゃないわ。なら次は本当に折りに行く。覚悟しておきなさい。${forwardHook}`;
+    if (target.archetype === "rough") return `いいじゃねぇか。そういう火花の方が、話してても熱くなる。${forwardHook}`;
+    return `また煽るのね。でも、そのくらいの火種がある方が次は面白い。${forwardHook}`;
   }
 
   if (delta.caution > 0 && relation.caution >= 20) {
-    return "……その言葉、まだ測っているところ。軽々しく踏み込むつもりはない。";
+    return `……その言葉、まだ測っているところ。軽々しく踏み込むつもりはない。${forwardHook}`;
   }
 
   if (/戦い|バトル|模擬戦|次/.test(message)) {
     return warm
-      ? "次に戦う時は、今より少しだけ息を合わせられる気がする。"
+      ? `次に戦う時は、今より少しだけ息を合わせられる気がする。${forwardHook}`
       : hostile
-        ? "次があるなら、今度はもっとはっきり決着をつける。"
-        : "次に向けて、少し準備をしておく。話したぶんだけ見えたものもある。";
+        ? `次があるなら、今度はもっとはっきり決着をつける。${forwardHook}`
+        : `次に向けて、少し準備をしておく。話したぶんだけ見えたものもある。${forwardHook}`;
   }
 
   if (warm) {
-    return `${voice.greeting} ……ってほど堅くはないか。こうして話す時間も、悪くないね。`;
+    return `${voice.greeting} ……ってほど堅くはないか。こうして話す時間も、悪くないね。${forwardHook}`;
   }
 
   if (hostile) {
-    return `${voice.resolve} ただ、勘違いしないで。馴れ合うつもりはまだない。`;
+    return `${voice.resolve} ただ、勘違いしないで。馴れ合うつもりはまだない。${forwardHook}`;
   }
 
   if (respectful) {
-    return `あなたの言葉は軽くは扱わない。${voice.praise}`;
+    return `あなたの言葉は軽くは扱わない。${voice.praise}${forwardHook}`;
   }
 
-  return `${voice.resolve} でも、今の話は覚えておく。`;
+  return `${voice.resolve} でも、今の話は覚えておく。${forwardHook}`;
 }
 
 function buildChatMemoryHint(target, delta) {
@@ -1264,6 +1279,98 @@ function buildChatMemoryHint(target, delta) {
     return `${target.name}はまだ警戒を解かず、言葉の裏を探っていた`;
   }
   return `${target.name}と短い会話を交わし、戦いの外側の温度が少しだけ見えた`;
+}
+
+function chooseLocalConversationMove(target, relation, chatMeta, inferredTopic) {
+  if (relation.rivalry >= 24) return "challenge";
+  if (relation.friendship >= 24 && chatMeta.turns >= 3) return "invite";
+  if (inferredTopic === "battle" || inferredTopic === "technique") return "ask";
+  if ((chatMeta.turns || 0) % 3 === 1) return "reveal";
+  if (relation.respect >= 18) return "reflect";
+  return "ask";
+}
+
+function buildForwardHook(target, relation, inferredTopic, moveType) {
+  const technique = target.techniques[0]?.name || "";
+  const hobby = splitCommaLikeText(target.hobbies)[0] || "";
+  const like = splitCommaLikeText(target.likes)[0] || "";
+
+  if (moveType === "challenge") {
+    return technique
+      ? ` 次はその時、${technique}にどう返すつもりなの？`
+      : " 次にぶつかる時、どんな勝ち方を考えてるの？";
+  }
+
+  if (moveType === "invite") {
+    return hobby
+      ? ` ……今度、戦いの話だけじゃなく${hobby}のことも聞かせてくれる？`
+      : " ……今度は戦う前に、少し落ち着いて話してみる？";
+  }
+
+  if (moveType === "reveal") {
+    return like
+      ? ` 私は${like}の時だけ、少し気が緩む。あなたにもそういうものってある？`
+      : " そういう時、あなたは何を支えにしてるの？";
+  }
+
+  if (moveType === "reflect") {
+    return inferredTopic === "battle"
+      ? " あの戦いで、あなた自身は何が一番変わったと思う？"
+      : " その言葉、あなたの中ではどういう意味を持ってるの？";
+  }
+
+  if (inferredTopic === "technique" && technique) {
+    return ` ところで、${technique}みたいな技って、あなたはどう受けるのが得意？`;
+  }
+
+  if (inferredTopic === "daily" && hobby) {
+    return ` 戦いの外だと、${hobby}をしてる時のあなたってどんな感じなの？`;
+  }
+
+  return " それで、あなたは次にどうしたい？";
+}
+
+function inferConversationTopic(message, target) {
+  if (/(技|奥義|戦い|バトル|模擬戦|訓練|勝つ|負け)/.test(message)) return "battle";
+  if (/(氷|影|刃|解析|能力|術式)/.test(message)) return "technique";
+  if (/(好き|趣味|休み|普段|食べ|飲み|休日)/.test(message)) return "daily";
+  if (/(怖い|寂しい|嬉しい|悲しい|怒|不安|信じ)/.test(message)) return "emotion";
+  if (target.faction && message.includes(target.faction)) return "faction";
+  return "general";
+}
+
+function getChatMeta(targetId) {
+  const key = getChatKey(targetId);
+  if (!state.chatMeta[key]) {
+    state.chatMeta[key] = {
+      turns: 0,
+      lastTopic: "general",
+      lastMove: "",
+      lastHook: "",
+      recentTopics: [],
+      lastUserMessage: "",
+      lastReply: "",
+    };
+  }
+  return state.chatMeta[key];
+}
+
+function updateChatMeta(targetId, { userMessage, replyText, inferredTopic, moveType, nextHook }) {
+  const meta = getChatMeta(targetId);
+  meta.turns += 1;
+  meta.lastTopic = inferredTopic || meta.lastTopic || "general";
+  meta.lastMove = moveType || meta.lastMove || "";
+  meta.lastHook = nextHook || "";
+  meta.recentTopics = [...(meta.recentTopics || []), inferredTopic || "general"].slice(-6);
+  meta.lastUserMessage = userMessage || "";
+  meta.lastReply = replyText || "";
+}
+
+function splitCommaLikeText(value) {
+  return String(value || "")
+    .split(/[、,，\/／]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function renderIntervalChoices() {
@@ -1850,7 +1957,7 @@ async function generateAiTurnText(context) {
   return JSON.parse(text);
 }
 
-async function generateAiRelationshipReply({ target, relation, playerMessage, thread }) {
+async function generateAiRelationshipReply({ target, relation, playerMessage, thread, chatMeta, inferredTopic }) {
   const historySnapshot = buildRelationshipHistorySnapshot(target.id, {
     includeBattle: false,
   });
@@ -1859,21 +1966,29 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     "You are writing a Japanese messenger-app reply for an original character relationship game.",
     "Reflect the target character's personality, tone, memories, and current relationship values.",
     "Strongly prioritize consistency with previous chats, battle memories, and the most recent relationship history.",
+    "Do not only mirror the user's emotion. Move the conversation forward.",
     "",
     "Output keys:",
-    "reply, moodNote, memoryHint",
+    "reply, moodNote, memoryHint, moveType, nextHook",
     "",
     `Target character: ${compactCharacterSheet(target)}`,
     `Relationship: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
     `Last remembered event: ${relation.lastMemory}`,
     `Relationship history snapshot: ${historySnapshot}`,
+    `Conversation meta: ${JSON.stringify(chatMeta)}`,
+    `Inferred topic: ${inferredTopic}`,
     `Player message: ${playerMessage}`,
     `Recent thread: ${JSON.stringify(thread.slice(-6))}`,
     "",
     "Requirements:",
-    "- reply should be 1 to 3 short Japanese messenger-style sentences.",
+    "- reply should be 2 to 4 short Japanese messenger-style sentences.",
+    "- reply must do one clear forward move: ask a specific follow-up question, reveal a new detail, propose an action, or revisit a remembered event with new nuance.",
+    "- avoid repeating the same emotional phrase as the last few replies.",
+    "- use concrete details from memories, hobbies, techniques, faction, or prior battles when possible.",
     "- moodNote should summarize the emotional reaction in one sentence.",
     "- memoryHint should be a short sentence suitable for a memory log.",
+    "- moveType should be one of ask, reveal, invite, challenge, reflect.",
+    "- nextHook should be a short phrase describing what topic the reply opens next.",
   ].join("\n");
 
   const text = await fetchCohereJson({
@@ -1882,11 +1997,13 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     maxTokens: 320,
     responseSchema: {
       type: "object",
-      required: ["reply", "moodNote", "memoryHint"],
+      required: ["reply", "moodNote", "memoryHint", "moveType", "nextHook"],
       properties: {
         reply: { type: "string" },
         moodNote: { type: "string" },
         memoryHint: { type: "string" },
+        moveType: { type: "string" },
+        nextHook: { type: "string" },
       },
     },
     messages: [
@@ -1957,6 +2074,7 @@ function compactCharacterSheet(character) {
 
 function buildRelationshipHistorySnapshot(targetId, options = {}) {
   const relation = getRelation("player", targetId);
+  const chatMeta = getChatMeta(targetId);
   const memories = getRelevantMemories(targetId, 6)
     .map((memory) => ({
       title: memory.title,
@@ -1979,6 +2097,7 @@ function buildRelationshipHistorySnapshot(targetId, options = {}) {
       respect: relation.respect,
       caution: relation.caution,
     },
+    conversationMeta: chatMeta,
     lastMemory: relation.lastMemory,
     recentMemories: memories,
     recentChat: chatDigest,
@@ -2367,6 +2486,7 @@ function cleanupCharacterData(characterId) {
     state.battle = null;
   }
   delete state.chats[getChatKey(characterId)];
+  delete state.chatMeta[getChatKey(characterId)];
   if (state.chatSelectedId === characterId) {
     const fallback = state.characters.find((character) => character.id !== "player" && character.id !== characterId);
     state.chatSelectedId = fallback?.id || "";
@@ -2520,6 +2640,7 @@ function loadState() {
       characters,
       customCharacterCount: Number(parsed.customCharacterCount) || customCharacters.length || 0,
       chats: parsed.chats || structuredClone(defaultState.chats),
+      chatMeta: parsed.chatMeta || structuredClone(defaultState.chatMeta),
       battle: parsed.battle || null,
     };
   } catch (error) {
