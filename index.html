@@ -36,6 +36,7 @@
       <button class="nav-btn" data-view="editor">キャラ編集</button>
       <button class="nav-btn" data-view="battle">バトル</button>
       <button class="nav-btn" data-view="chat">チャット</button>
+      <button class="nav-btn" data-view="charaverse">キャラバース</button>
       <button class="nav-btn" data-view="relations">関係一覧</button>
       <button class="nav-btn" data-view="memories">記憶ログ</button>
     </nav>
@@ -427,6 +428,54 @@
               </div>
             </form>
           </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-charaverse">
+        <div class="panel-grid charaverse-grid">
+          <article class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Character-Verse</p>
+                <h2>投稿する</h2>
+              </div>
+            </div>
+            <form id="charaverse-form" class="stack-form">
+              <label>
+                投稿キャラ
+                <select id="charaverse-author-select" name="authorId"></select>
+              </label>
+              <div class="two-col">
+                <label>
+                  ジャンル
+                  <select id="charaverse-genre-select" name="genre"></select>
+                </label>
+                <label>
+                  雰囲気
+                  <select id="charaverse-mood-select" name="mood"></select>
+                </label>
+              </div>
+              <label>
+                親の入力
+                <textarea id="charaverse-raw-input" name="rawInput" rows="5" placeholder="例：今日はカレーを作った。うまくできておいしかった。"></textarea>
+              </label>
+              <div class="form-actions">
+                <button class="secondary-btn" type="button" id="charaverse-reroll">もう一度生成</button>
+                <button class="primary-btn" type="submit" id="charaverse-post">投稿する</button>
+              </div>
+            </form>
+            <div id="charaverse-preview" class="charaverse-preview"></div>
+          </article>
+
+          <article class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Timeline</p>
+                <h2>タイムライン</h2>
+              </div>
+            </div>
+            <div id="charaverse-timeline" class="charaverse-timeline"></div>
+          </article>
         </div>
       </section>
 

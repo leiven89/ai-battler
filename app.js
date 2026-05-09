@@ -26,6 +26,29 @@ const chatDefinitions = {
   rematch: { label: "再戦要求", friendship: 0, rivalry: 2, respect: 2, caution: 0, heat: 6 },
 };
 
+const charaverseGenres = [
+  { key: "daily", label: "日常" },
+  { key: "cooking", label: "料理" },
+  { key: "training", label: "訓練" },
+  { key: "victory", label: "勝利報告" },
+  { key: "defeat", label: "敗北報告" },
+  { key: "thanks", label: "感謝" },
+  { key: "complaint", label: "文句" },
+  { key: "worry", label: "悩み" },
+  { key: "boast", label: "自慢" },
+  { key: "question", label: "質問" },
+  { key: "battle", label: "バトル後の感想" },
+];
+
+const charaverseMoods = [
+  { key: "bright", label: "明るい" },
+  { key: "shy", label: "照れ" },
+  { key: "proud", label: "自慢" },
+  { key: "calm", label: "しんみり" },
+  { key: "taunt", label: "挑発" },
+  { key: "cute", label: "かわいい" },
+];
+
 const intervalChoices = [
   { key: "recognize", label: "認める", friendship: 2, rivalry: 0, respect: 3, caution: -1, heat: 4 },
   { key: "taunt", label: "挑発する", friendship: -1, rivalry: 4, respect: 0, caution: 1, heat: 8 },
@@ -395,6 +418,12 @@ const defaultState = {
     ],
   },
   battleRecords: {},
+  charaverseComposer: {
+    authorId: "player",
+    genre: "daily",
+    mood: "bright",
+  },
+  charaversePosts: [],
   chatMeta: {},
   battle: null,
 };
@@ -449,6 +478,14 @@ const elements = {
   chatThread: document.getElementById("chat-thread"),
   chatForm: document.getElementById("chat-form"),
   chatSend: document.getElementById("chat-send"),
+  charaverseForm: document.getElementById("charaverse-form"),
+  charaverseAuthorSelect: document.getElementById("charaverse-author-select"),
+  charaverseGenreSelect: document.getElementById("charaverse-genre-select"),
+  charaverseMoodSelect: document.getElementById("charaverse-mood-select"),
+  charaverseRawInput: document.getElementById("charaverse-raw-input"),
+  charaverseReroll: document.getElementById("charaverse-reroll"),
+  charaversePreview: document.getElementById("charaverse-preview"),
+  charaverseTimeline: document.getElementById("charaverse-timeline"),
   relationsList: document.getElementById("relations-list"),
   memoriesList: document.getElementById("memories-list"),
 };
@@ -461,6 +498,7 @@ function init() {
   bindCharacterEditor();
   bindBattleControls();
   bindRelationshipChat();
+  bindCharaverse();
   renderRelationshipBadges();
   renderAll();
 }
@@ -713,6 +751,39 @@ function bindRelationshipChat() {
   });
 }
 
+function bindCharaverse() {
+  elements.charaverseAuthorSelect.addEventListener("change", () => {
+    state.charaverseComposer.authorId = elements.charaverseAuthorSelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.charaverseGenreSelect.addEventListener("change", () => {
+    state.charaverseComposer.genre = elements.charaverseGenreSelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.charaverseMoodSelect.addEventListener("change", () => {
+    state.charaverseComposer.mood = elements.charaverseMoodSelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.charaverseRawInput.addEventListener("input", () => {
+    renderCharaversePreview();
+  });
+
+  elements.charaverseReroll.addEventListener("click", async () => {
+    await renderCharaversePreview(true);
+  });
+
+  elements.charaverseForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await createCharaversePost();
+  });
+}
+
 function switchView(viewName) {
   elements.navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === viewName));
   elements.views.forEach((view) => view.classList.toggle("active", view.id === `view-${viewName}`));
@@ -732,6 +803,9 @@ function renderAll() {
   renderBattle();
   fillChatParticipants();
   renderRelationshipChat();
+  fillCharaverseComposer();
+  renderCharaversePreview();
+  renderCharaverseTimeline();
   renderRelations();
   renderMemories();
   renderHeroSummary();
@@ -1135,6 +1209,352 @@ function renderChatThread(thread) {
     `);
   });
   return items.join("");
+}
+
+function fillCharaverseComposer() {
+  elements.charaverseAuthorSelect.innerHTML = state.characters
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+    .join("");
+  elements.charaverseGenreSelect.innerHTML = charaverseGenres
+    .map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`)
+    .join("");
+  elements.charaverseMoodSelect.innerHTML = charaverseMoods
+    .map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`)
+    .join("");
+
+  if (!getCharacter(state.charaverseComposer.authorId)) {
+    state.charaverseComposer.authorId = "player";
+  }
+
+  elements.charaverseAuthorSelect.value = state.charaverseComposer.authorId;
+  elements.charaverseGenreSelect.value = state.charaverseComposer.genre;
+  elements.charaverseMoodSelect.value = state.charaverseComposer.mood;
+}
+
+async function renderCharaversePreview(forceAi = false) {
+  const author = getCharacter(elements.charaverseAuthorSelect.value || state.charaverseComposer.authorId || "player");
+  const rawInput = String(elements.charaverseRawInput.value || "").trim();
+  const genre = elements.charaverseGenreSelect.value || state.charaverseComposer.genre;
+  const mood = elements.charaverseMoodSelect.value || state.charaverseComposer.mood;
+
+  state.charaverseComposer.authorId = author?.id || "player";
+  state.charaverseComposer.genre = genre;
+  state.charaverseComposer.mood = mood;
+
+  if (!author) {
+    elements.charaversePreview.innerHTML = "<p>投稿キャラを選んでください。</p>";
+    return;
+  }
+
+  if (!rawInput) {
+    elements.charaversePreview.innerHTML = `<p><strong>${escapeHtml(author.name)}</strong> として投稿する内容を入力すると、ここにキャラバース風のプレビューが出ます。</p>`;
+    return;
+  }
+
+  let preview = null;
+  if (forceAi && canUseApi()) {
+    try {
+      preview = await generateAiCharaversePost({ author, rawInput, genre, mood });
+    } catch (error) {
+      state.settings.apiStatus = `キャラバース投稿はローカル変換へ切替: ${error.message}`;
+    }
+  }
+
+  if (!preview) {
+    preview = generateLocalCharaversePost(author, rawInput, genre, mood);
+  }
+
+  elements.charaversePreview.innerHTML = `
+    <p class="eyebrow">Preview</p>
+    <strong>${escapeHtml(author.name)} / ${escapeHtml(resolveCharaverseLabel(genre))}</strong>
+    <div>${escapeHtml(preview.postText)}</div>
+    <div class="charaverse-post-meta">
+      ${(preview.tags || []).map((tag) => `<span class="charaverse-tag">#${escapeHtml(tag)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function renderCharaverseTimeline() {
+  const posts = [...(state.charaversePosts || [])].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  if (!posts.length) {
+    elements.charaverseTimeline.innerHTML = `<div class="charaverse-post-card"><strong>まだ投稿がありません</strong><div>最初のキャラバース投稿を作ると、ここにキャラたちの生活が流れ始めます。</div></div>`;
+    return;
+  }
+
+  elements.charaverseTimeline.innerHTML = posts
+    .map((post) => renderCharaversePost(post))
+    .join("");
+}
+
+function renderCharaversePost(post) {
+  const author = getCharacter(post.authorId);
+  const reactions = (post.reactions || [])
+    .map((reaction) => {
+      const reactor = getCharacter(reaction.reactorId);
+      return `<span class="charaverse-reaction-chip">${escapeHtml(reactor?.name || "誰か")}「${escapeHtml(reaction.reactionLabel)}」</span>`;
+    })
+    .join("");
+  const comments = (post.comments || [])
+    .map((comment) => {
+      const commenter = getCharacter(comment.commenterId);
+      return `
+        <div class="charaverse-comment">
+          <strong>${escapeHtml(commenter?.name || "誰か")}</strong>
+          <div>${escapeHtml(comment.text)}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <article class="charaverse-post-card">
+      <div class="charaverse-post-head">
+        <strong>${escapeHtml(author?.name || "不明")}</strong>
+        <span class="badge">${escapeHtml(resolveCharaverseLabel(post.genre))}</span>
+        <span class="memory-meta">${escapeHtml(formatTimeOnly(post.timestamp))}</span>
+      </div>
+      <div>${escapeHtml(post.postText)}</div>
+      <div class="charaverse-post-meta">
+        ${(post.tags || []).map((tag) => `<span class="charaverse-tag">#${escapeHtml(tag)}</span>`).join("")}
+      </div>
+      ${reactions ? `<div class="charaverse-reactions">${reactions}</div>` : ""}
+      ${comments ? `<div class="charaverse-comments">${comments}</div>` : ""}
+    </article>
+  `;
+}
+
+async function createCharaversePost() {
+  const authorId = elements.charaverseAuthorSelect.value || state.charaverseComposer.authorId || "player";
+  const author = getCharacter(authorId);
+  const rawInput = String(elements.charaverseRawInput.value || "").trim();
+  const genre = elements.charaverseGenreSelect.value || state.charaverseComposer.genre;
+  const mood = elements.charaverseMoodSelect.value || state.charaverseComposer.mood;
+
+  if (!author || !rawInput) {
+    return;
+  }
+
+  let generated = null;
+  if (canUseApi()) {
+    try {
+      generated = await generateAiCharaversePost({ author, rawInput, genre, mood });
+      state.settings.apiStatus = `キャラバース生成: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `キャラバース投稿はローカル変換へ切替: ${error.message}`;
+    }
+  }
+  if (!generated) {
+    generated = generateLocalCharaversePost(author, rawInput, genre, mood);
+  }
+
+  const post = {
+    id: createId(),
+    authorId: author.id,
+    genre,
+    mood,
+    rawInput,
+    postText: generated.postText,
+    tags: generated.tags || [],
+    emotion: generated.emotion || mood,
+    timestamp: new Date().toISOString(),
+    reactions: [],
+    comments: [],
+  };
+
+  runCharaverseAutoActivity(post);
+  state.charaversePosts.unshift(post);
+  state.charaversePosts = state.charaversePosts.slice(0, 40);
+  saveMemory(author.id, `キャラバース投稿: ${author.name}`, `${author.name}が「${resolveCharaverseLabel(genre)}」の投稿をした。`);
+  elements.charaverseRawInput.value = "";
+  saveState();
+  renderAll();
+  switchView("charaverse");
+}
+
+function resolveCharaverseLabel(genreKey) {
+  return charaverseGenres.find((item) => item.key === genreKey)?.label || genreKey;
+}
+
+function generateLocalCharaversePost(author, rawInput, genre, mood) {
+  const firstPerson = author.firstPerson || author.name;
+  const moodLeadMap = {
+    bright: `${firstPerson}からの記録です。`,
+    shy: `ちょっと照れるけど、${firstPerson}の記録を残しておきます。`,
+    proud: `${firstPerson}としては、今日はかなり出来がよかったです。`,
+    calm: `静かに残しておきたいことがあります。`,
+    taunt: `${firstPerson}から一つだけ言っておきます。`,
+    cute: `${firstPerson}の小さな報告です。`,
+  };
+  const archetypeTailMap = {
+    cool: "……悪くない結果だった。",
+    tsundere: "べ、別に見てほしくて書いてるわけじゃないけど。",
+    gentle: "誰かにやさしく届いたら嬉しいです。",
+    rough: "まあ、悪くなかったってことだ。",
+    proud: "これくらいは当然と言っていい。",
+  };
+
+  const lead = moodLeadMap[mood] || `${firstPerson}の記録です。`;
+  const tail = archetypeTailMap[author.archetype] || "今日はそんなところです。";
+  const postText = `${lead}\n${rawInput}\n${tail}`;
+  return {
+    postText,
+    tags: [resolveCharaverseLabel(genre), charaverseMoods.find((item) => item.key === mood)?.label || mood].filter(Boolean),
+    emotion: mood,
+  };
+}
+
+function runCharaverseAutoActivity(post) {
+  const author = getCharacter(post.authorId);
+  if (!author) return;
+
+  const others = state.characters.filter((character) => character.id !== author.id);
+  const sorted = others
+    .map((character) => ({
+      character,
+      relation: getRelation(character.id, author.id),
+      score: getRelation(character.id, author.id).friendship + getRelation(character.id, author.id).respect + randomBetween(0, 6),
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  sorted.slice(0, Math.min(2, sorted.length)).forEach(({ character, relation }) => {
+    const reactionType = chooseCharaverseReactionType(character, relation, post);
+    const reaction = buildCharaverseReaction(character, author, relation, post, reactionType);
+    post.reactions.push(reaction);
+    applyRelationDelta(relation, reaction.delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = reaction.memory;
+    saveMemory(author.id, `キャラバース反応: ${character.name}`, reaction.memory);
+  });
+
+  sorted.slice(0, Math.min(2, sorted.length)).forEach(({ character, relation }, index) => {
+    if (index > 0 && randomBetween(0, 100) < 45) return;
+    const comment = buildCharaverseComment(character, author, relation, post);
+    post.comments.push(comment);
+    applyRelationDelta(relation, comment.delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = comment.memory;
+    saveMemory(author.id, `キャラバースコメント: ${character.name}`, comment.memory);
+  });
+}
+
+function chooseCharaverseReactionType(character, relation, post) {
+  if (post.genre === "training" || post.genre === "battle") {
+    return relation.rivalry >= 18 ? "rematch" : "respect";
+  }
+  if (post.genre === "defeat" || post.genre === "worry") {
+    return "cheer";
+  }
+  if (relation.respect >= 18) return "respect";
+  if (relation.rivalry >= 20) return "rematch";
+  return "like";
+}
+
+function buildCharaverseReaction(character, author, relation, post, type) {
+  const labelMap = {
+    like: {
+      cool: "悪くない",
+      tsundere: "ちょっとは認める",
+      gentle: "よか投稿やね",
+      rough: "気に入った",
+      proud: "評価に値する",
+    },
+    cheer: {
+      cool: "無理はするな",
+      tsundere: "心配してないけど",
+      gentle: "応援しとるけん",
+      rough: "へこむなよ",
+      proud: "立て直しなさい",
+    },
+    respect: {
+      cool: "……やるじゃん",
+      tsundere: "少しはやるのね",
+      gentle: "すごかねぇ",
+      rough: "見直した",
+      proud: "実力は認める",
+    },
+    rematch: {
+      cool: "次は俺が勝つ",
+      tsundere: "次は負けない",
+      gentle: "また勝負したかね",
+      rough: "次は正面から来い",
+      proud: "再戦を申請する",
+    },
+  };
+  const archetypeKey = character.archetype in archetypeVoices ? character.archetype : "cool";
+  const reactionLabel = labelMap[type]?.[archetypeKey] || "いいね";
+  const deltaMap = {
+    like: { friendship: 1, rivalry: 0, respect: 0, caution: 0 },
+    cheer: { friendship: 2, rivalry: 0, respect: 0, caution: -1 },
+    respect: { friendship: 0, rivalry: 0, respect: 2, caution: 0 },
+    rematch: { friendship: 0, rivalry: 2, respect: 1, caution: 1 },
+  };
+
+  return {
+    id: createId(),
+    reactorId: character.id,
+    reactionType: type,
+    reactionLabel,
+    reactionText: `${character.name}が${author.name}の投稿に「${reactionLabel}」と反応した。`,
+    delta: deltaMap[type],
+    memory: `${character.name}が${author.name}の投稿に「${reactionLabel}」と反応した`,
+  };
+}
+
+function buildCharaverseComment(character, author, relation, post) {
+  const text = generateLocalCharaverseComment(character, author, relation, post);
+  const delta = inferCharaverseCommentDelta(post, relation, text);
+  return {
+    id: createId(),
+    commenterId: character.id,
+    text,
+    delta,
+    memory: `${character.name}が${author.name}のキャラバース投稿にコメントした`,
+  };
+}
+
+function generateLocalCharaverseComment(character, author, relation, post) {
+  const first = character.firstPerson || character.name;
+  const genreLabel = resolveCharaverseLabel(post.genre);
+
+  if (post.genre === "cooking") {
+    if (relation.friendship >= 18) return `${author.name}らしい味になりそうだな。……次は${first}にも一口くらい回してくれ。`;
+    if (relation.respect >= 18) return `調理の完成度は悪くない。${genreLabel}の投稿としても見応えがある。`;
+    return `料理の記録か。こういう日常が見える投稿は嫌いじゃない。`;
+  }
+  if (post.genre === "training" || post.genre === "battle") {
+    if (relation.rivalry >= 20) return `その報告、覚えておく。次に並ぶ時は、同じ結果にはさせない。`;
+    return `訓練の積み重ねが見えるな。次に会う時の動きが少し楽しみになった。`;
+  }
+  if (post.genre === "defeat") {
+    return relation.friendship >= 16
+      ? `悔しさを隠さず書けるのは強さだと思う。次はもっといい報告にしよう。`
+      : `敗北をちゃんと記録するのは悪くない。そこから先をどう変えるかだ。`;
+  }
+  if (post.genre === "thanks") {
+    return `${author.name}がそういう言葉を表に出すの、少し意外だ。……でも、悪くない。`;
+  }
+  if (post.genre === "complaint") {
+    return relation.rivalry >= 18
+      ? `その棘、少しは似合ってる。けど言い切るなら最後まで通せ。`
+      : `文句の中にも本音が見えるな。少し落ち着いてから読み返すのもありだ。`;
+  }
+  if (post.genre === "question") {
+    return `${first}ならこう考える。……でも、${author.name}がどう答えを出すかも気になるな。`;
+  }
+
+  return relation.friendship >= 18
+    ? `こういう投稿、前よりずっと${author.name}らしく見える。続きをまた読みたい。`
+    : `${author.name}の今が少し見える投稿だった。記録として残しておく価値はある。`;
+}
+
+function inferCharaverseCommentDelta(post, relation, text) {
+  const delta = { friendship: 1, rivalry: 0, respect: 0, caution: 0 };
+  if (/(すご|悪くない|見応え|完成度|認め)/.test(text)) delta.respect += 2;
+  if (/(次|再戦|同じ結果にはさせない)/.test(text)) delta.rivalry += 2;
+  if (/(一口|読みたい|悪くない|らしい)/.test(text)) delta.friendship += 1;
+  if (post.genre === "defeat" || post.genre === "worry") delta.friendship += 1;
+  if (relation.rivalry >= 22 && post.genre === "battle") delta.caution += 1;
+  return delta;
 }
 
 async function sendRelationshipChat(message, actorId, targetId) {
@@ -2353,6 +2773,46 @@ async function generateAiRelationshipReply({ actor, target, relation, playerMess
   return JSON.parse(text);
 }
 
+async function generateAiCharaversePost({ author, rawInput, genre, mood }) {
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are a Character-Verse social post converter for an original character game.",
+    "Convert the raw parent input into a Japanese social post written by the character themself.",
+    "Keep the meaning, but make it feel like the character is posting on their own SNS.",
+    `Character sheet: ${compactCharacterSheet(author)}`,
+    `Genre: ${resolveCharaverseLabel(genre)}`,
+    `Mood: ${charaverseMoods.find((item) => item.key === mood)?.label || mood}`,
+    `Raw input: ${rawInput}`,
+    "Requirements:",
+    "- postText should be 2 to 4 short Japanese sentences.",
+    "- keep the character's first person, speaking style, and personality.",
+    "- do not make it sound like the parent is posting.",
+    "- tags should be short Japanese tags without #.",
+    "- emotion should be one short Japanese word or phrase.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.8, state.settings.temperature),
+    maxTokens: 280,
+    responseSchema: {
+      type: "object",
+      required: ["postText", "tags", "emotion"],
+      properties: {
+        postText: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+        emotion: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
 async function fetchCohereJson({ model, temperature, maxTokens, messages, responseSchema }) {
   const response = await fetch(INTERNAL_CHAT_URL, {
     method: "POST",
@@ -2940,6 +3400,13 @@ function keywordOverlapScore(actionNormalized, candidateNormalized) {
 
 function cleanupCharacterData(characterId) {
   state.memories = state.memories.filter((memory) => memory.opponentId !== characterId);
+  state.charaversePosts = (state.charaversePosts || [])
+    .filter((post) => post.authorId !== characterId)
+    .map((post) => ({
+      ...post,
+      reactions: (post.reactions || []).filter((reaction) => reaction.reactorId !== characterId),
+      comments: (post.comments || []).filter((comment) => comment.commenterId !== characterId),
+    }));
   Object.keys(state.relations).forEach((key) => {
     if (key.includes(`:${characterId}`) || key.startsWith(`${characterId}:`)) {
       delete state.relations[key];
@@ -3114,6 +3581,11 @@ function loadState() {
       },
       characters,
       customCharacterCount: Number(parsed.customCharacterCount) || customCharacters.length || 0,
+      charaverseComposer: {
+        ...structuredClone(defaultState.charaverseComposer),
+        ...(parsed.charaverseComposer || {}),
+      },
+      charaversePosts: parsed.charaversePosts || structuredClone(defaultState.charaversePosts),
       chats: parsed.chats || structuredClone(defaultState.chats),
       battleRecords: parsed.battleRecords || structuredClone(defaultState.battleRecords),
       chatMeta: parsed.chatMeta || structuredClone(defaultState.chatMeta),
