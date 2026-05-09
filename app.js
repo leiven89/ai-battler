@@ -6,6 +6,7 @@ const INTERNAL_TEST_URL = "/api/cohere/test";
 const COMMUNITY_SNAPSHOT_URL = "/api/community";
 const COMMUNITY_PUBLISH_CHARACTER_URL = "/api/community/character/publish";
 const COMMUNITY_PUBLISH_POST_URL = "/api/community/post/publish";
+const COMMUNITY_POST_COMMENT_URL = "/api/community/post/comment";
 
 const relationshipLabels = [
   "初対面",
@@ -1350,7 +1351,7 @@ function renderCharaversePost(post) {
   const author = getCharacter(post.authorId) || post.authorSnapshot || null;
   const isCommunityPost = post.scope === "community";
   const participantOptions = state.characters
-    .filter((character) => character.id !== post.authorId)
+    .filter((character) => character.id !== (author?.id || post.authorId))
     .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
     .join("");
   const reactions = (post.reactions || [])
@@ -1361,7 +1362,7 @@ function renderCharaversePost(post) {
     .join("");
   const comments = (post.comments || [])
     .map((comment) => {
-      const commenter = getCharacter(comment.commenterId);
+      const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || null;
       return `
         <div class="charaverse-comment">
           <strong>${escapeHtml(commenter?.name || "誰か")}</strong>
@@ -1385,7 +1386,12 @@ function renderCharaversePost(post) {
         ${(post.tags || []).map((tag) => `<span class="charaverse-tag">#${escapeHtml(tag)}</span>`).join("")}
       </div>
       ${isCommunityPost ? `
-        <div class="community-readonly">この投稿は公開タイムラインから読めます。バトルや続きの交流は公開キャラ側からつながります。</div>
+        <div class="charaverse-actions">
+          <select class="charaverse-inline-select" data-charaverse-actor="${escapeHtml(post.id)}">
+            ${participantOptions}
+          </select>
+          <span class="community-readonly">公開投稿です。コメントすると、ほかの人にも見える形で残ります。</span>
+        </div>
       ` : `
         <div class="charaverse-actions">
           <select class="charaverse-inline-select" data-charaverse-actor="${escapeHtml(post.id)}">
@@ -1396,7 +1402,14 @@ function renderCharaversePost(post) {
         </div>
       `}
       ${reactions ? `<div class="charaverse-reactions">${reactions}</div>` : ""}
-      ${isCommunityPost ? "" : `
+      ${isCommunityPost ? `
+        <div class="charaverse-comment-box">
+          <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この公開投稿へのコメント内容"></textarea>
+          <div class="charaverse-manual-tools">
+            <button class="primary-btn" type="button" data-charaverse-comment="${escapeHtml(post.id)}">公開コメント送信</button>
+          </div>
+        </div>
+      ` : `
         <div class="charaverse-comment-box">
           <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この投稿へのコメント内容"></textarea>
           <div class="charaverse-manual-tools">
@@ -1501,6 +1514,7 @@ function buildCommunityCharacter(entry) {
 function buildCommunityPost(entry) {
   return {
     id: `community:${entry.id}`,
+    communityEntryId: entry.id,
     scope: "community",
     profileId: entry.profileId,
     profileName: entry.profileName,
@@ -1514,15 +1528,19 @@ function buildCommunityPost(entry) {
     tags: entry.tags || [],
     timestamp: entry.timestamp || entry.publishedAt || new Date().toISOString(),
     reactions: [],
-    comments: [],
+    comments: Array.isArray(entry.comments) ? entry.comments : [],
   };
 }
 
 async function syncCommunitySnapshot(showSuccess = false) {
   try {
     const payload = await fetchJson(COMMUNITY_SNAPSHOT_URL);
-    const remoteCharacters = (payload.characters || []).filter((entry) => entry.profileId !== state.communityProfileId);
-    const remotePosts = (payload.posts || []).filter((entry) => entry.profileId !== state.communityProfileId);
+    const allCharacters = payload.characters || [];
+    const allPosts = payload.posts || [];
+    const remoteCharacters = allCharacters.filter((entry) => entry.profileId !== state.communityProfileId);
+    const ownPosts = allPosts.filter((entry) => entry.profileId === state.communityProfileId);
+    const remotePosts = allPosts.filter((entry) => entry.profileId !== state.communityProfileId);
+    ownPosts.forEach((entry) => mergeOwnPublishedPost(entry));
     state.communityCharacters = remoteCharacters.map((entry) => buildCommunityCharacter(entry));
     state.communityPosts = remotePosts.map((entry) => buildCommunityPost(entry));
     state.communityFeedStatus = showSuccess || !state.communityFeedStatus || /読み込み前|失敗/.test(state.communityFeedStatus)
@@ -1562,7 +1580,7 @@ async function publishCurrentCharacter() {
 
 async function publishCharaversePost(post, author) {
   try {
-    await postJson(COMMUNITY_PUBLISH_POST_URL, {
+    const payload = await postJson(COMMUNITY_PUBLISH_POST_URL, {
       profileId: state.communityProfileId,
       profileName: getCommunityProfileName(),
       post: {
@@ -1576,11 +1594,30 @@ async function publishCharaversePost(post, author) {
         timestamp: post.timestamp,
       },
     });
+    if (payload?.entry?.id) {
+      post.communityEntryId = payload.entry.id;
+    }
     state.communityStatus = `${author.name} の投稿を公開しました`;
     await syncCommunitySnapshot(true);
   } catch (error) {
     state.communityStatus = `投稿の公開失敗: ${error.message}`;
   }
+}
+
+function mergeOwnPublishedPost(entry) {
+  const localPost = (state.charaversePosts || []).find((post) =>
+    post.communityEntryId === entry.id
+    || (
+      post.authorId === entry.authorId
+      && post.timestamp === entry.timestamp
+      && post.postText === entry.postText
+    )
+  );
+  if (!localPost) {
+    return;
+  }
+  localPost.communityEntryId = entry.id;
+  localPost.comments = Array.isArray(entry.comments) ? entry.comments : localPost.comments || [];
 }
 
 function getCommunityProfileName() {
@@ -1594,6 +1631,33 @@ function getCommunityProfileName() {
 
 function getCharaversePost(postId) {
   return (state.charaversePosts || []).find((post) => post.id === postId) || null;
+}
+
+function getCommunityCharaversePost(postId) {
+  return (state.communityPosts || []).find((post) => post.id === postId) || null;
+}
+
+function getAnyCharaversePost(postId) {
+  return getCharaversePost(postId) || getCommunityCharaversePost(postId);
+}
+
+function getPostAuthorCharacter(post) {
+  if (!post) return null;
+  const author = getCharacter(post.authorId);
+  if (author) return author;
+  const snapshot = post.authorSnapshot || {};
+  const derivedId = post.scope === "community"
+    ? `community-author:${post.communityEntryId || post.id}:${snapshot.id || "author"}`
+    : (snapshot.id || post.authorId || `author:${post.id}`);
+  return makeCharacter({
+    id: derivedId,
+    name: snapshot.name || "不明",
+    title: snapshot.title || "",
+    archetype: snapshot.archetype || "cool",
+    tone: snapshot.tone || "",
+    faction: snapshot.faction || "",
+    imageDataUrl: snapshot.imageDataUrl || "",
+  });
 }
 
 function deleteCharaversePost(postId) {
@@ -1623,12 +1687,12 @@ async function handleCharaverseLike(postId) {
 }
 
 async function handleCharaverseManualComment(postId) {
-  const post = getCharaversePost(postId);
+  const post = getAnyCharaversePost(postId);
   if (!post) return;
   const actorSelect = document.querySelector(`[data-charaverse-actor="${postId}"]`);
   const input = document.querySelector(`[data-charaverse-comment-input="${postId}"]`);
   const commenter = getCharacter(actorSelect?.value || "");
-  const author = getCharacter(post.authorId);
+  const author = getPostAuthorCharacter(post);
   const rawInput = String(input?.value || "").trim();
   if (!commenter || !author || !rawInput || commenter.id === author.id) return;
 
@@ -1648,22 +1712,53 @@ async function handleCharaverseManualComment(postId) {
   }
 
   const delta = inferCharaverseCommentDelta(post, relation, text);
-  post.comments = post.comments || [];
-  post.comments.push({
+  const commentEntry = {
     id: createId(),
     commenterId: commenter.id,
+    commenterSnapshot: buildPostAuthorSnapshot(commenter),
     text,
+    timestamp: new Date().toISOString(),
     delta,
     memory: `${commenter.name}が${author.name}のキャラバース投稿に手動コメントした`,
-  });
+  };
 
-  applyRelationDelta(relation, delta);
-  relation.title = resolveRelationshipTitle(relation);
-  relation.lastMemory = `${commenter.name}が${author.name}のキャラバース投稿にコメントした`;
-  saveMemory(author.id, `キャラバース手動コメント: ${commenter.name}`, relation.lastMemory);
+  if (post.scope === "community") {
+    await publishCommunityComment(post, author, commenter, commentEntry);
+  } else {
+    post.comments = post.comments || [];
+    post.comments.push(commentEntry);
+    applyRelationDelta(relation, delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = `${commenter.name}が${author.name}のキャラバース投稿にコメントした`;
+    saveMemory(author.id, `キャラバース手動コメント: ${commenter.name}`, relation.lastMemory);
+    saveState();
+  }
+
   if (input) input.value = "";
-  saveState();
   renderAll();
+}
+
+async function publishCommunityComment(post, author, commenter, commentEntry) {
+  const relation = getRelation(commenter.id, author.id);
+  try {
+    await postJson(COMMUNITY_POST_COMMENT_URL, {
+      profileId: state.communityProfileId,
+      profileName: getCommunityProfileName(),
+      postId: post.communityEntryId || String(post.id || "").replace(/^community:/, ""),
+      comment: commentEntry,
+    });
+    applyRelationDelta(relation, commentEntry.delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = `${commenter.name}が${author.name}の公開投稿にコメントした`;
+    saveMemory(author.id, `公開コメント: ${commenter.name}`, relation.lastMemory);
+    state.communityStatus = `${commenter.name} の公開コメントを送信しました`;
+    await syncCommunitySnapshot(true);
+    saveState();
+  } catch (error) {
+    state.communityStatus = `公開コメント失敗: ${error.message}`;
+    saveState();
+    renderCommunityStatus();
+  }
 }
 
 function resolveCharaverseLabel(genreKey) {

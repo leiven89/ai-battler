@@ -9,3 +9,13 @@ services:
         sync: false
       - key: COHERE_MODEL_DEFAULT
         value: command-r-plus-08-2024
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FIRESTORE_CHARACTERS_COLLECTION
+        value: communityCharacters
+      - key: FIRESTORE_POSTS_COLLECTION
+        value: communityPosts

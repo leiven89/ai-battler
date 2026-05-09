@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 loadEnvFile(path.join(__dirname, ".env"));
 
@@ -9,6 +10,22 @@ const ROOT = __dirname;
 const COHERE_CHAT_URL = "https://api.cohere.com/v2/chat";
 const DEFAULT_MODEL = process.env.COHERE_MODEL_DEFAULT || "command-r-plus-08-2024";
 const COMMUNITY_FILE = path.join(ROOT, "community-data.json");
+
+const FIREBASE_PROJECT_ID = normalizeText(process.env.FIREBASE_PROJECT_ID);
+const FIREBASE_CLIENT_EMAIL = normalizeText(process.env.FIREBASE_CLIENT_EMAIL);
+const FIREBASE_PRIVATE_KEY = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+const FIRESTORE_CHARACTERS_COLLECTION = normalizeText(process.env.FIRESTORE_CHARACTERS_COLLECTION) || "communityCharacters";
+const FIRESTORE_POSTS_COLLECTION = normalizeText(process.env.FIRESTORE_POSTS_COLLECTION) || "communityPosts";
+const FIRESTORE_BASE_URL = FIREBASE_PROJECT_ID
+  ? `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`
+  : "";
+const FIREBASE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const FIREBASE_SCOPE = "https://www.googleapis.com/auth/datastore";
+
+let firebaseTokenCache = {
+  accessToken: "",
+  expiresAt: 0,
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -38,11 +55,13 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         hasApiKey: Boolean(process.env.COHERE_API_KEY),
         model: DEFAULT_MODEL,
+        communityBackend: getCommunityBackendMode(),
+        firebaseConfigured: isFirebaseConfigured(),
       });
     }
 
     if (req.method === "GET" && req.url === "/api/community") {
-      return handleCommunitySnapshot(res);
+      return await handleCommunitySnapshot(res);
     }
 
     if (req.method === "POST" && req.url === "/api/community/character/publish") {
@@ -51,6 +70,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/api/community/post/publish") {
       return await handleCommunityPostPublish(req, res);
+    }
+
+    if (req.method === "POST" && req.url === "/api/community/post/comment") {
+      return await handleCommunityPostComment(req, res);
     }
 
     return serveStatic(req, res);
@@ -66,7 +89,7 @@ server.listen(PORT, () => {
 async function handleCohereChat(req, res) {
   if (!process.env.COHERE_API_KEY) {
     return sendJson(res, 500, {
-      message: "COHERE_API_KEY がサーバーに設定されていません",
+      message: "COHERE_API_KEY is not configured on the server.",
     });
   }
 
@@ -110,7 +133,7 @@ async function handleCohereChat(req, res) {
 
   const text = coherePayload?.message?.content?.find((item) => item.type === "text")?.text;
   if (!text) {
-    return sendJson(res, 502, { message: "Cohere response にテキストがありません" });
+    return sendJson(res, 502, { message: "Cohere response did not include text content." });
   }
 
   return sendJson(res, 200, { text });
@@ -119,7 +142,7 @@ async function handleCohereChat(req, res) {
 async function handleCohereTest(req, res) {
   if (!process.env.COHERE_API_KEY) {
     return sendJson(res, 500, {
-      message: "COHERE_API_KEY がサーバーに設定されていません",
+      message: "COHERE_API_KEY is not configured on the server.",
     });
   }
 
@@ -170,10 +193,11 @@ async function handleCohereTest(req, res) {
   });
 }
 
-function handleCommunitySnapshot(res) {
-  const store = readCommunityStore();
+async function handleCommunitySnapshot(res) {
+  const store = await getCommunityStore();
   return sendJson(res, 200, {
     ok: true,
+    backend: getCommunityBackendMode(),
     updatedAt: store.updatedAt,
     characters: store.characters,
     posts: store.posts,
@@ -183,60 +207,47 @@ function handleCommunitySnapshot(res) {
 async function handleCommunityCharacterPublish(req, res) {
   const body = await readJsonBody(req);
   const profileId = normalizeText(body.profileId);
-  const profileName = normalizeText(body.profileName) || "匿名オーナー";
+  const profileName = normalizeText(body.profileName) || "Anonymous Owner";
   const character = body.character && typeof body.character === "object" ? body.character : null;
 
   if (!profileId || !character) {
-    return sendJson(res, 400, { message: "profileId と character が必要です" });
+    return sendJson(res, 400, { message: "profileId and character are required." });
   }
 
   const normalizedCharacter = normalizeCommunityCharacter(character);
   if (!normalizedCharacter.id || !normalizedCharacter.name) {
-    return sendJson(res, 400, { message: "公開キャラには id と name が必要です" });
+    return sendJson(res, 400, { message: "Published characters must include id and name." });
   }
 
-  const store = readCommunityStore();
-  const existingIndex = store.characters.findIndex((entry) =>
-    entry.profileId === profileId && entry.sourceCharacterId === normalizedCharacter.id
-  );
-  const now = new Date().toISOString();
-  const nextEntry = {
-    id: existingIndex >= 0 ? store.characters[existingIndex].id : createServerId("char"),
+  const entry = {
+    id: sanitizeFirestoreDocId(`${profileId}__${normalizedCharacter.id}`),
     profileId,
     profileName,
     sourceCharacterId: normalizedCharacter.id,
-    publishedAt: now,
+    publishedAt: new Date().toISOString(),
     character: normalizedCharacter,
   };
 
-  if (existingIndex >= 0) {
-    store.characters[existingIndex] = nextEntry;
-  } else {
-    store.characters.unshift(nextEntry);
-  }
-
-  store.updatedAt = now;
-  writeCommunityStore(store);
-  return sendJson(res, 200, { ok: true, entry: nextEntry });
+  await saveCommunityCharacter(entry);
+  return sendJson(res, 200, { ok: true, entry });
 }
 
 async function handleCommunityPostPublish(req, res) {
   const body = await readJsonBody(req);
   const profileId = normalizeText(body.profileId);
-  const profileName = normalizeText(body.profileName) || "匿名オーナー";
+  const profileName = normalizeText(body.profileName) || "Anonymous Owner";
   const post = body.post && typeof body.post === "object" ? body.post : null;
 
   if (!profileId || !post) {
-    return sendJson(res, 400, { message: "profileId と post が必要です" });
+    return sendJson(res, 400, { message: "profileId and post are required." });
   }
 
   const normalizedPost = normalizeCommunityPost(post);
   if (!normalizedPost.authorSnapshot?.name || !normalizedPost.postText) {
-    return sendJson(res, 400, { message: "公開投稿には authorSnapshot.name と postText が必要です" });
+    return sendJson(res, 400, { message: "Published posts must include authorSnapshot.name and postText." });
   }
 
-  const store = readCommunityStore();
-  const nextEntry = {
+  const entry = {
     id: createServerId("post"),
     profileId,
     profileName,
@@ -244,11 +255,36 @@ async function handleCommunityPostPublish(req, res) {
     ...normalizedPost,
   };
 
-  store.posts.unshift(nextEntry);
-  store.posts = store.posts.slice(0, 200);
-  store.updatedAt = nextEntry.publishedAt;
-  writeCommunityStore(store);
-  return sendJson(res, 200, { ok: true, entry: nextEntry });
+  await saveCommunityPost(entry);
+  return sendJson(res, 200, { ok: true, entry });
+}
+
+async function handleCommunityPostComment(req, res) {
+  const body = await readJsonBody(req);
+  const profileId = normalizeText(body.profileId);
+  const profileName = normalizeText(body.profileName) || "Anonymous Owner";
+  const postId = normalizeText(body.postId);
+  const comment = body.comment && typeof body.comment === "object" ? body.comment : null;
+
+  if (!profileId || !postId || !comment) {
+    return sendJson(res, 400, { message: "profileId, postId, and comment are required." });
+  }
+
+  const normalizedComment = normalizeCommunityComment(comment);
+  if (!normalizedComment.commenterSnapshot?.name || !normalizedComment.text) {
+    return sendJson(res, 400, { message: "Public comments must include commenterSnapshot.name and text." });
+  }
+
+  const entry = {
+    id: createServerId("comment"),
+    profileId,
+    profileName,
+    publishedAt: new Date().toISOString(),
+    ...normalizedComment,
+  };
+
+  const updatedPost = await appendCommunityPostComment(postId, entry);
+  return sendJson(res, 200, { ok: true, entry, post: updatedPost });
 }
 
 function serveStatic(req, res) {
@@ -301,7 +337,7 @@ function readJsonBody(req) {
       }
       try {
         resolve(JSON.parse(data));
-      } catch (error) {
+      } catch (_error) {
         reject(new Error("Invalid JSON body"));
       }
     });
@@ -311,6 +347,14 @@ function readJsonBody(req) {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizePrivateKey(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return "";
+  }
+  return text.replace(/\\n/g, "\n");
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -323,7 +367,96 @@ function extractCohereError(payload) {
   return payload?.message || payload?.error?.message || payload?.error || "";
 }
 
-function readCommunityStore() {
+function isFirebaseConfigured() {
+  return Boolean(FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY);
+}
+
+function getCommunityBackendMode() {
+  return isFirebaseConfigured() ? "firebase" : "local-file";
+}
+
+async function getCommunityStore() {
+  if (!isFirebaseConfigured()) {
+    return readCommunityStoreFromFile();
+  }
+
+  const [characters, posts] = await Promise.all([
+    listFirestoreCollection(FIRESTORE_CHARACTERS_COLLECTION),
+    listFirestoreCollection(FIRESTORE_POSTS_COLLECTION),
+  ]);
+
+  const latestCharacterTime = characters.map((item) => item.publishedAt).sort().at(-1) || "";
+  const latestPostTime = posts.map((item) => item.publishedAt || item.timestamp).sort().at(-1) || "";
+  const updatedAt = [latestCharacterTime, latestPostTime].filter(Boolean).sort().at(-1) || new Date().toISOString();
+
+  return {
+    updatedAt,
+    characters: characters.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt)),
+    posts: posts.sort((a, b) => new Date(b.publishedAt || b.timestamp) - new Date(a.publishedAt || a.timestamp)),
+  };
+}
+
+async function saveCommunityCharacter(entry) {
+  if (!isFirebaseConfigured()) {
+    const store = readCommunityStoreFromFile();
+    const index = store.characters.findIndex((item) => item.id === entry.id);
+    if (index >= 0) {
+      store.characters[index] = entry;
+    } else {
+      store.characters.unshift(entry);
+    }
+    store.updatedAt = entry.publishedAt;
+    writeCommunityStoreToFile(store);
+    return;
+  }
+
+  await writeFirestoreDocument(FIRESTORE_CHARACTERS_COLLECTION, entry.id, entry);
+}
+
+async function saveCommunityPost(entry) {
+  if (!isFirebaseConfigured()) {
+    const store = readCommunityStoreFromFile();
+    store.posts.unshift(entry);
+    store.posts = store.posts.slice(0, 200);
+    store.updatedAt = entry.publishedAt;
+    writeCommunityStoreToFile(store);
+    return;
+  }
+
+  await writeFirestoreDocument(FIRESTORE_POSTS_COLLECTION, entry.id, entry);
+}
+
+async function appendCommunityPostComment(postId, commentEntry) {
+  if (!isFirebaseConfigured()) {
+    const store = readCommunityStoreFromFile();
+    const index = store.posts.findIndex((item) => item.id === postId);
+    if (index < 0) {
+      throw new Error("Community post not found.");
+    }
+    const nextPost = {
+      ...store.posts[index],
+      comments: [...(store.posts[index].comments || []), commentEntry].slice(-80),
+    };
+    store.posts[index] = nextPost;
+    store.updatedAt = commentEntry.publishedAt;
+    writeCommunityStoreToFile(store);
+    return nextPost;
+  }
+
+  const existing = await readFirestoreDocument(FIRESTORE_POSTS_COLLECTION, postId);
+  if (!existing) {
+    throw new Error("Community post not found.");
+  }
+
+  const nextPost = {
+    ...existing,
+    comments: [...(existing.comments || []), commentEntry].slice(-80),
+  };
+  await writeFirestoreDocument(FIRESTORE_POSTS_COLLECTION, postId, nextPost);
+  return nextPost;
+}
+
+function readCommunityStoreFromFile() {
   if (!fs.existsSync(COMMUNITY_FILE)) {
     const initial = { updatedAt: new Date().toISOString(), characters: [], posts: [] };
     fs.writeFileSync(COMMUNITY_FILE, JSON.stringify(initial, null, 2), "utf8");
@@ -343,7 +476,7 @@ function readCommunityStore() {
   }
 }
 
-function writeCommunityStore(store) {
+function writeCommunityStoreToFile(store) {
   fs.writeFileSync(COMMUNITY_FILE, JSON.stringify(store, null, 2), "utf8");
 }
 
@@ -421,6 +554,32 @@ function normalizeCommunityPost(post) {
       faction: normalizeText(post?.authorSnapshot?.faction),
       imageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.imageDataUrl),
     },
+    comments: Array.isArray(post.comments)
+      ? post.comments.slice(0, 80).map((comment) => normalizeCommunityComment(comment))
+      : [],
+  };
+}
+
+function normalizeCommunityComment(comment) {
+  return {
+    commenterId: normalizeText(comment.commenterId),
+    text: normalizeText(comment.text),
+    timestamp: normalizeText(comment.timestamp) || new Date().toISOString(),
+    delta: {
+      friendship: clampNumber(comment?.delta?.friendship, -20, 20, 0),
+      rivalry: clampNumber(comment?.delta?.rivalry, -20, 20, 0),
+      respect: clampNumber(comment?.delta?.respect, -20, 20, 0),
+      caution: clampNumber(comment?.delta?.caution, -20, 20, 0),
+    },
+    commenterSnapshot: {
+      id: normalizeText(comment?.commenterSnapshot?.id),
+      name: normalizeText(comment?.commenterSnapshot?.name),
+      title: normalizeText(comment?.commenterSnapshot?.title),
+      archetype: normalizeText(comment?.commenterSnapshot?.archetype) || "cool",
+      tone: normalizeText(comment?.commenterSnapshot?.tone),
+      faction: normalizeText(comment?.commenterSnapshot?.faction),
+      imageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.imageDataUrl),
+    },
   };
 }
 
@@ -434,6 +593,207 @@ function normalizeImageDataUrl(value) {
 
 function createServerId(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function sanitizeFirestoreDocId(value) {
+  return String(value || "")
+    .replaceAll("/", "_")
+    .replaceAll("\\", "_")
+    .replaceAll("?", "_")
+    .replaceAll("#", "_")
+    .replaceAll("[", "_")
+    .replaceAll("]", "_")
+    .slice(0, 120);
+}
+
+async function listFirestoreCollection(collectionName) {
+  const response = await firebaseFetch(`${FIRESTORE_BASE_URL}/${collectionName}?pageSize=100`);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractGoogleApiError(payload) || "Failed to list Firestore documents.");
+  }
+
+  return (payload.documents || []).map((document) => decodeFirestoreDocument(document));
+}
+
+async function readFirestoreDocument(collectionName, docId) {
+  const safeId = sanitizeFirestoreDocId(docId);
+  const response = await firebaseFetch(`${FIRESTORE_BASE_URL}/${collectionName}/${safeId}`);
+  if (response.status === 404) {
+    return null;
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractGoogleApiError(payload) || "Failed to read Firestore document.");
+  }
+  return decodeFirestoreDocument(payload);
+}
+
+async function writeFirestoreDocument(collectionName, docId, data) {
+  const safeId = sanitizeFirestoreDocId(docId);
+  const response = await firebaseFetch(`${FIRESTORE_BASE_URL}/${collectionName}/${safeId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      fields: encodeFirestoreFields(data),
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractGoogleApiError(payload) || "Failed to write Firestore document.");
+  }
+
+  return payload;
+}
+
+async function firebaseFetch(url, options = {}) {
+  const accessToken = await getFirebaseAccessToken();
+  const headers = {
+    ...(options.headers || {}),
+    Authorization: `Bearer ${accessToken}`,
+  };
+
+  return fetch(url, {
+    ...options,
+    headers,
+  });
+}
+
+async function getFirebaseAccessToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (firebaseTokenCache.accessToken && firebaseTokenCache.expiresAt > now + 60) {
+    return firebaseTokenCache.accessToken;
+  }
+
+  if (!isFirebaseConfigured()) {
+    throw new Error("Firebase server credentials are not configured.");
+  }
+
+  const assertion = createServiceAccountAssertion(now);
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion,
+  });
+
+  const response = await fetch(FIREBASE_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractGoogleApiError(payload) || "Failed to obtain Firebase access token.");
+  }
+
+  firebaseTokenCache = {
+    accessToken: payload.access_token,
+    expiresAt: now + Number(payload.expires_in || 3600),
+  };
+  return firebaseTokenCache.accessToken;
+}
+
+function createServiceAccountAssertion(nowInSeconds) {
+  const header = {
+    alg: "RS256",
+    typ: "JWT",
+  };
+  const payload = {
+    iss: FIREBASE_CLIENT_EMAIL,
+    scope: FIREBASE_SCOPE,
+    aud: FIREBASE_TOKEN_URL,
+    exp: nowInSeconds + 3600,
+    iat: nowInSeconds,
+  };
+
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const unsignedToken = `${encodedHeader}.${encodedPayload}`;
+  const signature = crypto.createSign("RSA-SHA256").update(unsignedToken).sign(FIREBASE_PRIVATE_KEY, "base64url");
+  return `${unsignedToken}.${signature}`;
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function encodeFirestoreFields(data) {
+  const fields = {};
+  Object.entries(data).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+    fields[key] = encodeFirestoreValue(value);
+  });
+  return fields;
+}
+
+function encodeFirestoreValue(value) {
+  if (value === null) {
+    return { nullValue: null };
+  }
+  if (Array.isArray(value)) {
+    return {
+      arrayValue: {
+        values: value.map((item) => encodeFirestoreValue(item)),
+      },
+    };
+  }
+  if (typeof value === "boolean") {
+    return { booleanValue: value };
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? { integerValue: String(value) }
+      : { doubleValue: value };
+  }
+  if (typeof value === "string") {
+    return { stringValue: value };
+  }
+  if (typeof value === "object") {
+    return {
+      mapValue: {
+        fields: encodeFirestoreFields(value),
+      },
+    };
+  }
+  return { stringValue: String(value) };
+}
+
+function decodeFirestoreDocument(document) {
+  return decodeFirestoreMap(document.fields || {});
+}
+
+function decodeFirestoreMap(fields) {
+  const result = {};
+  Object.entries(fields).forEach(([key, value]) => {
+    result[key] = decodeFirestoreValue(value);
+  });
+  return result;
+}
+
+function decodeFirestoreValue(value) {
+  if ("stringValue" in value) return value.stringValue;
+  if ("integerValue" in value) return Number(value.integerValue);
+  if ("doubleValue" in value) return Number(value.doubleValue);
+  if ("booleanValue" in value) return Boolean(value.booleanValue);
+  if ("nullValue" in value) return null;
+  if ("mapValue" in value) return decodeFirestoreMap(value.mapValue.fields || {});
+  if ("arrayValue" in value) {
+    return Array.isArray(value.arrayValue.values)
+      ? value.arrayValue.values.map((item) => decodeFirestoreValue(item))
+      : [];
+  }
+  return null;
+}
+
+function extractGoogleApiError(payload) {
+  return payload?.error?.message || payload?.error_description || payload?.message || "";
 }
 
 function loadEnvFile(filePath) {
