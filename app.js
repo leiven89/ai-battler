@@ -647,6 +647,7 @@ function bindBattleControls() {
     const form = new FormData(elements.battleForm);
     const action = (form.get("action") || "").toString().trim();
     const chatCategory = (form.get("chatCategory") || "greeting").toString();
+    const customBattleLine = (form.get("customBattleLine") || "").toString().trim();
     const useChat = form.get("useChat") === "on";
 
     if (!action) {
@@ -655,7 +656,7 @@ function bindBattleControls() {
       return;
     }
 
-    await resolveTurn(action, useChat ? chatCategory : null);
+    await resolveTurn(action, useChat ? chatCategory : null, useChat ? customBattleLine : "");
     elements.battleForm.reset();
     elements.battleForm.querySelector('input[name="useChat"]').checked = true;
     renderAll();
@@ -1210,36 +1211,36 @@ function generateLocalRelationshipReply(target, relation, message, delta, chatMe
 
   if (/この前|前に|さっき|前回/.test(message)) {
     if (lastMemory) {
-      return `覚えている。${lastMemory}……あの時のことを、まだ簡単には切り分けられない。${forwardHook}`;
+      return `覚えている。${lastMemory}……あの時の余韻、まだ胸の奥に沈んだままだ。${forwardHook}`;
     }
   }
 
   if (recentMemories.some((memory) => /挑発|因縁|屈辱/.test(memory.body)) && delta.friendship > 0) {
-    return `今さら優しくされても、すぐに全部が変わるわけじゃない。でも……前よりは、ちゃんと聞く気がある。${forwardHook}`;
+    return `今さら優しくされても、すぐに全部が変わるわけじゃない。でも……前よりは、ちゃんと聞く気がある。言葉の温度くらいは、もう見誤らない。${forwardHook}`;
   }
 
   if (recentThread && /ありがとう|助かった/.test(recentThread) && delta.friendship > 0) {
-    return `また礼を言うのね。そういう積み重ねは、嫌いじゃない。少しずつだけど、伝わってる。${forwardHook}`;
+    return `また礼を言うのね。そういう積み重ねは、嫌いじゃない。少しずつだけど、確かに伝わってる。${forwardHook}`;
   }
 
   if (delta.friendship >= 2 && warm) {
-    if (target.archetype === "gentle") return `えへへ、そう言ってもらえると嬉しいな。あなたと話す時間、けっこう好きかも。${forwardHook}`;
-    if (target.archetype === "cool") return `そういう言葉は嫌いじゃない。今のやり取りは覚えておく。${forwardHook}`;
+    if (target.archetype === "gentle") return `えへへ、そう言ってもらえると嬉しいな。胸の奥にふわっと灯りがともるみたい。あなたと話す時間、けっこう好きかも。${forwardHook}`;
+    if (target.archetype === "cool") return `そういう言葉は嫌いじゃない。静かだけど、ちゃんと届いた。今のやり取りは覚えておく。${forwardHook}`;
   }
 
   if (delta.respect >= 2 && respectful) {
-    if (target.archetype === "proud") return `見る目はあるのね。そこまで言うなら、次はもっと高いところで受けて立つわ。${forwardHook}`;
-    return `その評価は軽く扱わない。次は言葉だけじゃなく、結果でも返そう。${forwardHook}`;
+    if (target.archetype === "proud") return `見る目はあるのね。そこまで言うなら、次はもっと高いところで受けて立つわ。言葉だけで終わる評価なんて、私には似合わないもの。${forwardHook}`;
+    return `その評価は軽く扱わない。言葉の重さは、戦場で返すのが一番正しい。次は結果でも返そう。${forwardHook}`;
   }
 
   if (delta.rivalry >= 2 && hostile) {
-    if (target.archetype === "proud") return `その挑発、嫌いじゃないわ。なら次は本当に折りに行く。覚悟しておきなさい。${forwardHook}`;
-    if (target.archetype === "rough") return `いいじゃねぇか。そういう火花の方が、話してても熱くなる。${forwardHook}`;
-    return `また煽るのね。でも、そのくらいの火種がある方が次は面白い。${forwardHook}`;
+    if (target.archetype === "proud") return `その挑発、嫌いじゃないわ。胸の奥で火花が弾けるくらいにはね。なら次は本当に折りに行く。覚悟しておきなさい。${forwardHook}`;
+    if (target.archetype === "rough") return `いいじゃねぇか。そういう火花の方が、話してても血が熱くなる。${forwardHook}`;
+    return `また煽るのね。でも、そのくらいの火種がある方が次は面白い。静かに終わる関係なんて、たぶん似合わない。${forwardHook}`;
   }
 
   if (delta.caution > 0 && relation.caution >= 20) {
-    return `……その言葉、まだ測っているところ。軽々しく踏み込むつもりはない。${forwardHook}`;
+    return `……その言葉、まだ測っているところ。軽々しく踏み込むつもりはない。けれど、完全に閉ざすほどでもなくなってきた。${forwardHook}`;
   }
 
   if (/戦い|バトル|模擬戦|次/.test(message)) {
@@ -1251,18 +1252,18 @@ function generateLocalRelationshipReply(target, relation, message, delta, chatMe
   }
 
   if (warm) {
-    return `${voice.greeting} ……ってほど堅くはないか。こうして話す時間も、悪くないね。${forwardHook}`;
+    return `${voice.greeting} ……ってほど堅くはないか。こうして話す時間も、悪くないね。戦いの時とは違う顔が見えるのも、少し新鮮だ。${forwardHook}`;
   }
 
   if (hostile) {
-    return `${voice.resolve} ただ、勘違いしないで。馴れ合うつもりはまだない。${forwardHook}`;
+    return `${voice.resolve} ただ、勘違いしないで。馴れ合うつもりはまだない。でも言葉を交わすたび、刃の交わり方は少しずつ変わっていく。${forwardHook}`;
   }
 
   if (respectful) {
-    return `あなたの言葉は軽くは扱わない。${voice.praise}${forwardHook}`;
+    return `あなたの言葉は軽くは扱わない。${voice.praise} そういう一言が、案外いちばん深く残ることもある。${forwardHook}`;
   }
 
-  return `${voice.resolve} でも、今の話は覚えておく。${forwardHook}`;
+  return `${voice.resolve} でも、今の話は覚えておく。言葉は短くても、残るものは案外大きい。${forwardHook}`;
 }
 
 function buildChatMemoryHint(target, delta) {
@@ -1513,7 +1514,7 @@ function startBattle() {
   renderBattle();
 }
 
-async function resolveTurn(action, chatCategory) {
+async function resolveTurn(action, chatCategory, customBattleLine = "") {
   const battle = state.battle;
   if (!battle) return;
 
@@ -1534,7 +1535,8 @@ async function resolveTurn(action, chatCategory) {
     playerOutcome.playerStateAfter,
     playerOutcome.enemyStateAfter,
   );
-  const chatDelta = chatCategory ? computeChatDelta(chatCategory, battle.lastChatCategory) : null;
+  const battleSpeech = buildBattleSpeechInput(chatCategory, customBattleLine, battle.lastChatCategory, relation);
+  const chatDelta = battleSpeech ? battleSpeech.delta : null;
 
   let aiText = null;
   if (canUseApi()) {
@@ -1545,7 +1547,8 @@ async function resolveTurn(action, chatCategory) {
         enemy,
         relation,
         action,
-        chatCategory,
+        chatCategory: battleSpeech?.category || null,
+        customBattleLine: battleSpeech?.line || "",
         playerOutcome,
         enemyOutcome,
         chatDelta,
@@ -1557,7 +1560,7 @@ async function resolveTurn(action, chatCategory) {
     }
   }
 
-  applyStateTransition(battle, relation, playerOutcome, enemyOutcome, chatDelta, chatCategory);
+  applyStateTransition(battle, relation, playerOutcome, enemyOutcome, chatDelta, battleSpeech?.category || null);
 
   battle.logs.push({
     type: "action",
@@ -1570,16 +1573,16 @@ async function resolveTurn(action, chatCategory) {
     text: aiText?.battleSummary || playerOutcome.summary,
   });
 
-  if (chatCategory) {
+  if (battleSpeech) {
     battle.logs.push({
       type: "action",
-      label: `チャット: ${chatDefinitions[chatCategory].label}`,
-      text: `${player.name}「${aiText?.chatLine || generateFallbackChatLine(player, chatCategory, relation)}」`,
+      label: battleSpeech.label,
+      text: `${player.name}「${aiText?.chatLine || generateFallbackBattleSpeech(player, battleSpeech, relation)}」`,
     });
     battle.logs.push({
       type: "system",
       label: "相手反応",
-      text: `${enemy.name}「${aiText?.enemyReaction || generateFallbackReactionLine(enemy, chatCategory, relation)}」`,
+      text: `${enemy.name}「${aiText?.enemyReaction || generateFallbackReactionLine(enemy, battleSpeech.category || "resolve", relation, battleSpeech.line)}」`,
     });
   }
 
@@ -1860,6 +1863,62 @@ function computeChatDelta(chatCategory, lastChatCategory) {
   return { ...chat, repeated: lastChatCategory === chatCategory };
 }
 
+function buildBattleSpeechInput(chatCategory, customBattleLine, lastChatCategory, relation) {
+  if (customBattleLine) {
+    const inferredCategory = inferBattleSpeechCategory(customBattleLine, chatCategory);
+    const delta = {
+      ...analyzeChatMessageEffect(customBattleLine, relation),
+      repeated: lastChatCategory === inferredCategory,
+      heat: calculateBattleSpeechHeat(customBattleLine, inferredCategory),
+    };
+    return {
+      category: inferredCategory,
+      line: customBattleLine,
+      label: `自由台詞${inferredCategory ? ` / ${chatDefinitions[inferredCategory]?.label || inferredCategory}` : ""}`,
+      delta,
+      custom: true,
+    };
+  }
+
+  if (!chatCategory) {
+    return null;
+  }
+
+  return {
+    category: chatCategory,
+    line: "",
+    label: `チャット: ${chatDefinitions[chatCategory].label}`,
+    delta: computeChatDelta(chatCategory, lastChatCategory),
+    custom: false,
+  };
+}
+
+function inferBattleSpeechCategory(line, fallbackCategory = "resolve") {
+  if (/(ありがとう|感謝|助かった)/.test(line)) return "thanks";
+  if (/(認め|すごい|強い|見事|さすが)/.test(line)) return "praise";
+  if (/(ごめん|悪かった|謝)/.test(line)) return "apology";
+  if (/(大丈夫|心配|無理するな|休め)/.test(line)) return "concern";
+  if (/(倒す|負けない|挑発|煽|かかってこい|黙れ)/.test(line)) return "taunt";
+  if (/(次|再戦|また戦)/.test(line)) return "rematch";
+  if (/(よろしく|初めまして|会えて)/.test(line)) return "greeting";
+  return fallbackCategory || "resolve";
+}
+
+function calculateBattleSpeechHeat(line, category) {
+  let heat = chatDefinitions[category]?.heat || 4;
+  if (/[！？!！]/.test(line)) heat += 1;
+  if (/(絶対|必ず|今度こそ|本気)/.test(line)) heat += 2;
+  if (/(静かに|落ち着いて|ちゃんと)/.test(line)) heat -= 1;
+  return clamp(heat, 1, 10);
+}
+
+function generateFallbackBattleSpeech(player, battleSpeech, relation) {
+  if (battleSpeech.custom && battleSpeech.line) {
+    return battleSpeech.line;
+  }
+  return generateFallbackChatLine(player, battleSpeech.category || "resolve", relation);
+}
+
 async function generateAiTurnText(context) {
   const relation = context.relation;
   const historySnapshot = buildRelationshipHistorySnapshot(context.enemy.id, {
@@ -1869,7 +1928,8 @@ async function generateAiTurnText(context) {
   const prompt = [
     "Generate a JSON object only.",
     "You are the battle narrator for an original character relationship battle game.",
-    "Write anime-style prose in Japanese.",
+    "Write Japanese prose that feels like a fusion of a novel and a game log.",
+    "Use light-novel style narration, sensory detail, emotion, and dramatic rhythm.",
     "Do not change the numeric outcomes. Use the provided outcomes exactly.",
     "Strongly prioritize consistency with previous battles, chats, and memories.",
     "",
@@ -1880,6 +1940,7 @@ async function generateAiTurnText(context) {
     `Half: ${context.battle.half}`,
     `Player action: ${context.action}`,
     `Chat category: ${context.chatCategory || "none"}`,
+    `Direct battle line: ${context.customBattleLine || "none"}`,
     `Triggered technique: ${context.playerOutcome.triggeredTechnique ? JSON.stringify({
       name: context.playerOutcome.triggeredTechnique.technique.name,
       type: context.playerOutcome.triggeredTechnique.technique.type,
@@ -1911,11 +1972,12 @@ async function generateAiTurnText(context) {
       : "Enemy counter outcome: none",
     "",
     "Requirements:",
-    "- battleLog should narrate the player's action.",
-    "- battleSummary should summarize the numeric result naturally.",
+    "- battleLog should narrate the player's action with novel-like dramatic texture.",
+    "- battleSummary should summarize the numeric result naturally but still read like fiction.",
+    "- if Direct battle line is present, chatLine should preserve its intent and wording instead of replacing it with a category template.",
     "- chatLine should sound like the player character.",
-    "- enemyReaction should sound like the enemy character.",
-    "- counterLog should narrate the enemy counterattack.",
+    "- enemyReaction should sound like the enemy character and answer the emotional content of the line.",
+    "- counterLog should narrate the enemy counterattack with momentum and cinematic clarity.",
     "- counterSummary should summarize its numeric result naturally.",
     "- relationNote should describe relationship/emotional movement in one sentence.",
     "- memoryHint should be a short sentence suitable for a memory log.",
@@ -1967,6 +2029,7 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     "Reflect the target character's personality, tone, memories, and current relationship values.",
     "Strongly prioritize consistency with previous chats, battle memories, and the most recent relationship history.",
     "Do not only mirror the user's emotion. Move the conversation forward.",
+    "The tone should feel like a fusion of a novel scene and an in-game conversation.",
     "",
     "Output keys:",
     "reply, moodNote, memoryHint, moveType, nextHook",
@@ -1981,7 +2044,7 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     `Recent thread: ${JSON.stringify(thread.slice(-6))}`,
     "",
     "Requirements:",
-    "- reply should be 2 to 4 short Japanese messenger-style sentences.",
+    "- reply should be 2 to 4 Japanese sentences with light-novel flavor, while still fitting a messenger app.",
     "- reply must do one clear forward move: ask a specific follow-up question, reveal a new detail, propose an action, or revisit a remembered event with new nuance.",
     "- avoid repeating the same emotional phrase as the last few replies.",
     "- use concrete details from memories, hobbies, techniques, faction, or prior battles when possible.",
