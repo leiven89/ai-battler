@@ -393,6 +393,7 @@ const defaultState = {
       },
     ],
   },
+  battleRecords: {},
   chatMeta: {},
   battle: null,
 };
@@ -1107,6 +1108,7 @@ async function sendRelationshipChat(message, targetId) {
   const relation = getRelation("player", targetId);
   const thread = getChatThread(targetId);
   const chatMeta = getChatMeta(targetId);
+  const battleBundle = getBattleRecordBundle(targetId);
   const delta = analyzeChatMessageEffect(message, relation);
   const inferredTopic = inferConversationTopic(message, target);
 
@@ -1129,6 +1131,7 @@ async function sendRelationshipChat(message, targetId) {
         playerMessage: message,
         thread,
         chatMeta,
+        battleBundle,
         inferredTopic,
       });
       state.settings.apiStatus = `会話生成成功: ${state.settings.model}`;
@@ -1137,7 +1140,7 @@ async function sendRelationshipChat(message, targetId) {
     }
   }
 
-  const replyText = replyPayload?.reply || generateLocalRelationshipReply(target, relation, message, delta, chatMeta, inferredTopic);
+  const replyText = replyPayload?.reply || generateBattleAwareRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
   thread.push({
     id: createId(),
     sender: "character",
@@ -1198,7 +1201,7 @@ function analyzeChatMessageEffect(message, relation) {
   return delta;
 }
 
-function generateLocalRelationshipReply(target, relation, message, delta, chatMeta, inferredTopic) {
+function generateLocalRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
   const warm = relation.friendship >= 24;
   const hostile = relation.rivalry >= 24 || relation.caution >= 24;
   const respectful = relation.respect >= 18;
@@ -1264,6 +1267,30 @@ function generateLocalRelationshipReply(target, relation, message, delta, chatMe
   }
 
   return `${voice.resolve} でも、今の話は覚えておく。言葉は短くても、残るものは案外大きい。${forwardHook}`;
+}
+
+function generateBattleAwareRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
+  const lastBattle = battleBundle?.last;
+  const battleTalk = inferredTopic === "battle" || /勝|負|圧勝|惨敗|接戦|前の戦い|この前の戦い/.test(message);
+
+  if (battleTalk && lastBattle) {
+    const forwardHook = buildForwardHook(target, relation, inferredTopic, chooseLocalConversationMove(target, relation, chatMeta, inferredTopic));
+    const playerWonLast = lastBattle.result === "win";
+    const decisive = lastBattle.outcomeType === "decisive";
+    const close = lastBattle.outcomeType === "close";
+
+    if (playerWonLast) {
+      if (decisive) return `……前の戦いのことを言っているのね。あれは認めるしかない、完全にあなたの流れだった。だからこそ、次に同じ形では終わらせない。${forwardHook}`;
+      if (close) return `覚えてる。ほんの一手ぶん、あなたが上だった戦い。あの決着の薄さが、まだ胸に残ってる。${forwardHook}`;
+      return `あの勝負はあなたが取った。けれど、差そのものはもう見えている。次はそこをひっくり返すだけよ。${forwardHook}`;
+    }
+
+    if (decisive) return `あの戦いは私の勝ちだったし、しかもかなりはっきり差が出た。……でも、それで終わりだとは思っていないから、こうして話している。${forwardHook}`;
+    if (close) return `前は私が勝った。でも、あれは余裕のある勝ち方じゃなかった。次にやれば、もっと危ういところまで行く気がしてる。${forwardHook}`;
+    return `勝敗だけ見れば前は私が上だった。でも、あなたの動きはちゃんと残ってる。だから軽くは見ていない。${forwardHook}`;
+  }
+
+  return generateLocalRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
 }
 
 function buildChatMemoryHint(target, delta) {
@@ -1592,14 +1619,6 @@ async function resolveTurn(action, chatCategory, customBattleLine = "") {
     });
   }
 
-  if (battleSpeech || enemyOutcome) {
-    battle.logs.push({
-      type: "action",
-      label: `${enemy.name}の返し`,
-      text: `${enemy.name}「${generateBattleInterjection(enemy, relation, playerOutcome, battle)}」`,
-    });
-  }
-
   if (enemyOutcome) {
     battle.logs.push({
       type: "action",
@@ -1610,14 +1629,6 @@ async function resolveTurn(action, chatCategory, customBattleLine = "") {
       type: "system",
       label: "戦況",
       text: aiText?.counterSummary || enemyOutcome.summary,
-    });
-  }
-
-  if (enemyOutcome) {
-    battle.logs.push({
-      type: "action",
-      label: `${enemy.name}の追撃台詞`,
-      text: `${enemy.name}「${generateCounterAfterLine(enemy, relation, enemyOutcome, battle)}」`,
     });
   }
 
@@ -1719,6 +1730,7 @@ function finishBattle(memoryHint = "") {
   const enemy = getCharacter(battle.enemyId);
   const relation = getRelation("player", enemy.id);
   const playerWon = battle.enemyState.hp <= battle.playerState.hp;
+  const battleRecord = summarizeBattleRecord(battle, enemy.id, playerWon);
   battle.finished = true;
 
   const postEvent = resolvePostBattleEvent(relation, playerWon, enemy, memoryHint);
@@ -1735,6 +1747,7 @@ function finishBattle(memoryHint = "") {
     text: postEvent.log,
   });
 
+  saveBattleRecord(enemy.id, battleRecord);
   saveMemory(enemy.id, postEvent.title, postEvent.memory);
 }
 
@@ -2003,7 +2016,7 @@ async function generateAiTurnText(context) {
     "Write Japanese prose that feels like a fusion of a novel and a game log.",
     "Use light-novel style narration, sensory detail, emotion, and dramatic rhythm.",
     "Do not change the numeric outcomes. Use the provided outcomes exactly.",
-    "Strongly prioritize consistency with previous battles, chats, and memories.",
+    "Strongly prioritize consistency with previous battles, chats, memories, and the full character sheets.",
     "",
     "Output keys:",
     'battleLog, battleSummary, chatLine, enemyReaction, enemyInterjection, counterLog, counterSummary, relationNote, memoryHint',
@@ -2045,6 +2058,7 @@ async function generateAiTurnText(context) {
     "",
     "Requirements:",
     "- battleLog should narrate the player's action with novel-like dramatic texture and should usually include spoken lines from either side.",
+    "- use the full character settings, including speech habits, likes, dislikes, origin, reactions, techniques, and notes, when choosing wording.",
     "- battleSummary should summarize the numeric result naturally but still read like fiction.",
     "- if Direct battle line is present, chatLine should preserve its intent and wording instead of replacing it with a category template.",
     "- chatLine should sound like the player character.",
@@ -2095,7 +2109,7 @@ async function generateAiTurnText(context) {
   return JSON.parse(text);
 }
 
-async function generateAiRelationshipReply({ target, relation, playerMessage, thread, chatMeta, inferredTopic }) {
+async function generateAiRelationshipReply({ target, relation, playerMessage, thread, chatMeta, battleBundle, inferredTopic }) {
   const historySnapshot = buildRelationshipHistorySnapshot(target.id, {
     includeBattle: false,
   });
@@ -2103,9 +2117,10 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     "Generate a JSON object only.",
     "You are writing a Japanese messenger-app reply for an original character relationship game.",
     "Reflect the target character's personality, tone, memories, and current relationship values.",
-    "Strongly prioritize consistency with previous chats, battle memories, and the most recent relationship history.",
+    "Strongly prioritize consistency with previous chats, battle memories, full character settings, and the most recent relationship history.",
     "Do not only mirror the user's emotion. Move the conversation forward.",
     "The tone should feel like a fusion of a novel scene and an in-game conversation.",
+    "Use the full character sheet, not just the current mood.",
     "",
     "Output keys:",
     "reply, moodNote, memoryHint, moveType, nextHook",
@@ -2113,6 +2128,7 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     `Target character: ${compactCharacterSheet(target)}`,
     `Relationship: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
     `Last remembered event: ${relation.lastMemory}`,
+    `Battle record summary: ${JSON.stringify(battleBundle)}`,
     `Relationship history snapshot: ${historySnapshot}`,
     `Conversation meta: ${JSON.stringify(chatMeta)}`,
     `Inferred topic: ${inferredTopic}`,
@@ -2123,7 +2139,9 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     "- reply should be 2 to 4 Japanese sentences with light-novel flavor, while still fitting a messenger app.",
     "- reply must do one clear forward move: ask a specific follow-up question, reveal a new detail, propose an action, or revisit a remembered event with new nuance.",
     "- avoid repeating the same emotional phrase as the last few replies.",
-    "- use concrete details from memories, hobbies, techniques, faction, or prior battles when possible.",
+    "- use concrete details from memories, hobbies, techniques, faction, origin, speech habits, or prior battles when possible.",
+    "- when prior battle results are relevant, understand who won or lost, whether it was close or decisive, and let that affect the tone naturally.",
+    "- never confuse who won and who lost in previous battles.",
     "- moodNote should summarize the emotional reaction in one sentence.",
     "- memoryHint should be a short sentence suitable for a memory log.",
     "- moveType should be one of ask, reveal, invite, challenge, reflect.",
@@ -2185,17 +2203,25 @@ async function fetchCohereJson({ model, temperature, maxTokens, messages, respon
 
 function compactCharacterSheet(character) {
   return JSON.stringify({
+    id: character.id,
     name: character.name,
     title: character.title,
+    age: character.age,
+    gender: character.gender,
+    firstPerson: character.firstPerson,
+    secondPerson: character.secondPerson,
     archetype: character.archetype,
+    faction: character.faction,
     tone: character.tone,
     personality: character.personality,
     ability: character.ability,
     style: character.style,
     weakness: character.weakness,
     ultimate: character.ultimate,
+    origin: character.origin,
     likes: character.likes,
     dislikes: character.dislikes,
+    hobbies: character.hobbies,
     techniques: character.techniques,
     mannerisms: character.mannerisms,
     favoritePhrase: character.favoritePhrase,
@@ -2207,6 +2233,7 @@ function compactCharacterSheet(character) {
     defeatStyle: character.defeatStyle,
     victoryStyle: character.victoryStyle,
     notes: character.notes,
+    hasImage: Boolean(character.imageDataUrl),
     stats: character.stats,
   });
 }
@@ -2214,6 +2241,7 @@ function compactCharacterSheet(character) {
 function buildRelationshipHistorySnapshot(targetId, options = {}) {
   const relation = getRelation("player", targetId);
   const chatMeta = getChatMeta(targetId);
+  const battleBundle = getBattleRecordBundle(targetId);
   const memories = getRelevantMemories(targetId, 6)
     .map((memory) => ({
       title: memory.title,
@@ -2238,6 +2266,7 @@ function buildRelationshipHistorySnapshot(targetId, options = {}) {
     },
     conversationMeta: chatMeta,
     lastMemory: relation.lastMemory,
+    battleHistory: battleBundle,
     recentMemories: memories,
     recentChat: chatDigest,
   };
@@ -2259,6 +2288,66 @@ function getRelevantMemories(targetId, limit = 6) {
     .filter((memory) => memory.opponentId === targetId)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .slice(0, limit);
+}
+
+function getBattleRecordBundle(targetId) {
+  const records = [...(state.battleRecords[targetId] || [])]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const total = records.length;
+  const wins = records.filter((record) => record.result === "win").length;
+  const losses = records.filter((record) => record.result === "loss").length;
+  const decisiveWins = records.filter((record) => record.result === "win" && record.outcomeType === "decisive").length;
+  const decisiveLosses = records.filter((record) => record.result === "loss" && record.outcomeType === "decisive").length;
+  const closeBattles = records.filter((record) => record.outcomeType === "close").length;
+  const last = records[0] || null;
+
+  return {
+    total,
+    wins,
+    losses,
+    decisiveWins,
+    decisiveLosses,
+    closeBattles,
+    last,
+    recent: records.slice(0, 5),
+  };
+}
+
+function summarizeBattleRecord(battle, enemyId, playerWon) {
+  const hpGap = Math.abs(battle.playerState.hp - battle.enemyState.hp);
+  const staminaGap = Math.abs(battle.playerState.stamina - battle.enemyState.stamina);
+  let outcomeType = "standard";
+
+  if (hpGap <= 10) {
+    outcomeType = "close";
+  } else if (hpGap >= 35 || (hpGap >= 24 && staminaGap >= 20)) {
+    outcomeType = "decisive";
+  }
+
+  return {
+    id: createId(),
+    opponentId: enemyId,
+    result: playerWon ? "win" : "loss",
+    outcomeType,
+    playerHp: battle.playerState.hp,
+    enemyHp: battle.enemyState.hp,
+    playerStamina: battle.playerState.stamina,
+    enemyStamina: battle.enemyState.stamina,
+    heat: battle.heat,
+    turn: battle.turn,
+    half: battle.half,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function saveBattleRecord(targetId, record) {
+  if (!state.battleRecords[targetId]) {
+    state.battleRecords[targetId] = [];
+  }
+  state.battleRecords[targetId].push(record);
+  state.battleRecords[targetId] = state.battleRecords[targetId]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 24);
 }
 
 function generateFallbackChatLine(character, chatCategory, relation) {
@@ -2652,6 +2741,7 @@ function cleanupCharacterData(characterId) {
     state.battle = null;
   }
   delete state.chats[getChatKey(characterId)];
+  delete state.battleRecords[characterId];
   delete state.chatMeta[getChatKey(characterId)];
   if (state.chatSelectedId === characterId) {
     const fallback = state.characters.find((character) => character.id !== "player" && character.id !== characterId);
@@ -2806,6 +2896,7 @@ function loadState() {
       characters,
       customCharacterCount: Number(parsed.customCharacterCount) || customCharacters.length || 0,
       chats: parsed.chats || structuredClone(defaultState.chats),
+      battleRecords: parsed.battleRecords || structuredClone(defaultState.battleRecords),
       chatMeta: parsed.chatMeta || structuredClone(defaultState.chatMeta),
       battle: parsed.battle || null,
     };
