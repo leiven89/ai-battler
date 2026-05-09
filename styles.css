@@ -679,6 +679,27 @@ input[type="range"] {
   padding-left: 12px;
 }
 
+.charaverse-actions,
+.charaverse-manual-tools {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.charaverse-manual-tools {
+  margin-top: 8px;
+}
+
+.charaverse-comment-box {
+  display: grid;
+  gap: 8px;
+}
+
+.charaverse-inline-select {
+  min-width: 160px;
+}
+
 .charaverse-tag {
   border-radius: 999px;
   padding: 6px 10px;

@@ -782,6 +782,25 @@ function bindCharaverse() {
     event.preventDefault();
     await createCharaversePost();
   });
+
+  elements.charaverseTimeline.addEventListener("click", async (event) => {
+    const likeButton = event.target.closest("[data-charaverse-like]");
+    if (likeButton) {
+      await handleCharaverseLike(likeButton.dataset.charaverseLike);
+      return;
+    }
+
+    const commentButton = event.target.closest("[data-charaverse-comment]");
+    if (commentButton) {
+      await handleCharaverseManualComment(commentButton.dataset.charaverseComment);
+      return;
+    }
+
+    const deleteButton = event.target.closest("[data-charaverse-delete]");
+    if (deleteButton) {
+      deleteCharaversePost(deleteButton.dataset.charaverseDelete);
+    }
+  });
 }
 
 function switchView(viewName) {
@@ -1288,6 +1307,10 @@ function renderCharaverseTimeline() {
 
 function renderCharaversePost(post) {
   const author = getCharacter(post.authorId);
+  const participantOptions = state.characters
+    .filter((character) => character.id !== post.authorId)
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+    .join("");
   const reactions = (post.reactions || [])
     .map((reaction) => {
       const reactor = getCharacter(reaction.reactorId);
@@ -1317,7 +1340,20 @@ function renderCharaversePost(post) {
       <div class="charaverse-post-meta">
         ${(post.tags || []).map((tag) => `<span class="charaverse-tag">#${escapeHtml(tag)}</span>`).join("")}
       </div>
+      <div class="charaverse-actions">
+        <select class="charaverse-inline-select" data-charaverse-actor="${escapeHtml(post.id)}">
+          ${participantOptions}
+        </select>
+        <button class="secondary-btn" type="button" data-charaverse-like="${escapeHtml(post.id)}">いいねする</button>
+        <button class="secondary-btn" type="button" data-charaverse-delete="${escapeHtml(post.id)}">投稿を削除</button>
+      </div>
       ${reactions ? `<div class="charaverse-reactions">${reactions}</div>` : ""}
+      <div class="charaverse-comment-box">
+        <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この投稿へのコメント内容"></textarea>
+        <div class="charaverse-manual-tools">
+          <button class="primary-btn" type="button" data-charaverse-comment="${escapeHtml(post.id)}">コメント送信</button>
+        </div>
+      </div>
       ${comments ? `<div class="charaverse-comments">${comments}</div>` : ""}
     </article>
   `;
@@ -1369,6 +1405,80 @@ async function createCharaversePost() {
   saveState();
   renderAll();
   switchView("charaverse");
+}
+
+function getCharaversePost(postId) {
+  return (state.charaversePosts || []).find((post) => post.id === postId) || null;
+}
+
+function deleteCharaversePost(postId) {
+  state.charaversePosts = (state.charaversePosts || []).filter((post) => post.id !== postId);
+  saveState();
+  renderAll();
+}
+
+async function handleCharaverseLike(postId) {
+  const post = getCharaversePost(postId);
+  if (!post) return;
+  const actorSelect = document.querySelector(`[data-charaverse-actor="${postId}"]`);
+  const reactor = getCharacter(actorSelect?.value || "");
+  const author = getCharacter(post.authorId);
+  if (!reactor || !author || reactor.id === author.id) return;
+
+  const relation = getRelation(reactor.id, author.id);
+  const reaction = buildCharaverseReaction(reactor, author, relation, post, "like");
+  post.reactions = (post.reactions || []).filter((item) => item.reactorId !== reactor.id);
+  post.reactions.push(reaction);
+  applyRelationDelta(relation, reaction.delta);
+  relation.title = resolveRelationshipTitle(relation);
+  relation.lastMemory = reaction.memory;
+  saveMemory(author.id, `キャラバースいいね: ${reactor.name}`, reaction.memory);
+  saveState();
+  renderAll();
+}
+
+async function handleCharaverseManualComment(postId) {
+  const post = getCharaversePost(postId);
+  if (!post) return;
+  const actorSelect = document.querySelector(`[data-charaverse-actor="${postId}"]`);
+  const input = document.querySelector(`[data-charaverse-comment-input="${postId}"]`);
+  const commenter = getCharacter(actorSelect?.value || "");
+  const author = getCharacter(post.authorId);
+  const rawInput = String(input?.value || "").trim();
+  if (!commenter || !author || !rawInput || commenter.id === author.id) return;
+
+  const relation = getRelation(commenter.id, author.id);
+  let text = "";
+  if (canUseApi()) {
+    try {
+      const generated = await generateAiCharaverseComment({ commenter, author, relation, post, rawInput });
+      text = generated.commentText;
+      state.settings.apiStatus = `キャラバースコメント生成: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `キャラバースコメントはローカル補正へ切替: ${error.message}`;
+    }
+  }
+  if (!text) {
+    text = generateLocalManualCharaverseComment(commenter, author, rawInput);
+  }
+
+  const delta = inferCharaverseCommentDelta(post, relation, text);
+  post.comments = post.comments || [];
+  post.comments.push({
+    id: createId(),
+    commenterId: commenter.id,
+    text,
+    delta,
+    memory: `${commenter.name}が${author.name}のキャラバース投稿に手動コメントした`,
+  });
+
+  applyRelationDelta(relation, delta);
+  relation.title = resolveRelationshipTitle(relation);
+  relation.lastMemory = `${commenter.name}が${author.name}のキャラバース投稿にコメントした`;
+  saveMemory(author.id, `キャラバース手動コメント: ${commenter.name}`, relation.lastMemory);
+  if (input) input.value = "";
+  saveState();
+  renderAll();
 }
 
 function resolveCharaverseLabel(genreKey) {
@@ -1545,6 +1655,17 @@ function generateLocalCharaverseComment(character, author, relation, post) {
   return relation.friendship >= 18
     ? `こういう投稿、前よりずっと${author.name}らしく見える。続きをまた読みたい。`
     : `${author.name}の今が少し見える投稿だった。記録として残しておく価値はある。`;
+}
+
+function generateLocalManualCharaverseComment(commenter, author, rawInput) {
+  const archetypeTailMap = {
+    cool: "……そういうところは、嫌いじゃない。",
+    tsundere: "べ、別に本気で褒めてるわけじゃないけど。",
+    gentle: "やさしく届いたら嬉しかね。",
+    rough: "まあ、言いたいことはそれだ。",
+    proud: "そのくらいの言葉なら残してもいい。",
+  };
+  return `${rawInput}\n${archetypeTailMap[commenter.archetype] || `${commenter.name}はそう思った。`}`;
 }
 
 function inferCharaverseCommentDelta(post, relation, text) {
@@ -2802,6 +2923,44 @@ async function generateAiCharaversePost({ author, rawInput, genre, mood }) {
         postText: { type: "string" },
         tags: { type: "array", items: { type: "string" } },
         emotion: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
+async function generateAiCharaverseComment({ commenter, author, relation, post, rawInput }) {
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are a Character-Verse comment converter for an original character game.",
+    "Convert the raw parent input into a Japanese comment written by the commenter character themself.",
+    `Commenter sheet: ${compactCharacterSheet(commenter)}`,
+    `Author sheet: ${compactCharacterSheet(author)}`,
+    `Relationship: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
+    `Post genre: ${resolveCharaverseLabel(post.genre)}`,
+    `Post text: ${post.postText}`,
+    `Raw parent comment intent: ${rawInput}`,
+    "Requirements:",
+    "- commentText should be 1 to 2 Japanese sentences.",
+    "- keep the commenter's tone and personality.",
+    "- react naturally to the post instead of sounding generic.",
+    "- do not make it excessively aggressive.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.8, state.settings.temperature),
+    maxTokens: 220,
+    responseSchema: {
+      type: "object",
+      required: ["commentText"],
+      properties: {
+        commentText: { type: "string" },
       },
     },
     messages: [
