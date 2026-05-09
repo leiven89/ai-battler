@@ -331,6 +331,7 @@ const defaultState = {
   editorCharacterId: "player",
   editorTechniqueIndex: -1,
   selectedEnemyId: "eira",
+  chatActorId: "player",
   chatSelectedId: "eira",
   characters: sampleCharacters,
   relations: {
@@ -441,6 +442,8 @@ const elements = {
   heatMeter: document.getElementById("heat-meter"),
   intervalBanner: document.getElementById("interval-banner"),
   intervalActions: document.getElementById("interval-actions"),
+  chatActorSelect: document.getElementById("chat-actor-select"),
+  chatTargetSelect: document.getElementById("chat-target-select"),
   chatContactList: document.getElementById("chat-contact-list"),
   chatThreadHeader: document.getElementById("chat-thread-header"),
   chatThread: document.getElementById("chat-thread"),
@@ -665,6 +668,20 @@ function bindBattleControls() {
 }
 
 function bindRelationshipChat() {
+  elements.chatActorSelect.addEventListener("change", () => {
+    state.chatActorId = elements.chatActorSelect.value;
+    ensureChatPairState();
+    saveState();
+    renderAll();
+  });
+
+  elements.chatTargetSelect.addEventListener("change", () => {
+    state.chatSelectedId = elements.chatTargetSelect.value;
+    ensureChatPairState();
+    saveState();
+    renderAll();
+  });
+
   elements.chatContactList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-chat-target]");
     if (!button) {
@@ -672,6 +689,7 @@ function bindRelationshipChat() {
     }
 
     state.chatSelectedId = button.dataset.chatTarget;
+    ensureChatPairState();
     saveState();
     renderAll();
   });
@@ -689,7 +707,7 @@ function bindRelationshipChat() {
       return;
     }
 
-    await sendRelationshipChat(message, currentTarget.id);
+    await sendRelationshipChat(message, getChatActorCharacter()?.id || "player", currentTarget.id);
     elements.chatForm.reset();
     renderAll();
   });
@@ -712,6 +730,7 @@ function renderAll() {
   renderCharacterEditorActions();
   renderEnemyRoster();
   renderBattle();
+  fillChatParticipants();
   renderRelationshipChat();
   renderRelations();
   renderMemories();
@@ -1042,11 +1061,12 @@ function renderBattle() {
 }
 
 function renderRelationshipChat() {
-  const contacts = state.characters.filter((character) => character.id !== "player");
+  const actor = getChatActorCharacter();
+  const contacts = state.characters.filter((character) => character.id !== state.chatActorId);
   elements.chatContactList.innerHTML = contacts
     .map((character) => {
-      const relation = getRelation("player", character.id);
-      const thread = getChatThread(character.id);
+      const relation = getRelation(state.chatActorId, character.id);
+      const thread = getChatThread(state.chatActorId, character.id);
       const lastMessage = thread.at(-1);
       const activeClass = state.chatSelectedId === character.id ? "active" : "";
       return `
@@ -1062,22 +1082,36 @@ function renderRelationshipChat() {
     .join("");
 
   const target = getChatTargetCharacter();
-  if (!target) {
+  if (!actor || !target) {
     elements.chatThreadHeader.innerHTML = "<h3>会話相手がいません</h3>";
     elements.chatThread.innerHTML = "";
     elements.chatSend.disabled = true;
     return;
   }
 
-  const relation = getRelation("player", target.id);
-  const thread = getChatThread(target.id);
+  const relation = getRelation(actor.id, target.id);
+  const thread = getChatThread(actor.id, target.id);
   elements.chatThreadHeader.innerHTML = `
     <p class="eyebrow">LINE-like Relationship Chat</p>
-    <h2>${escapeHtml(target.name)}</h2>
+    <h2>${escapeHtml(actor.name)} → ${escapeHtml(target.name)}</h2>
     <p>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect} / 警戒 ${relation.caution}</p>
   `;
   elements.chatThread.innerHTML = renderChatThread(thread);
   elements.chatSend.disabled = false;
+}
+
+function fillChatParticipants() {
+  ensureChatPairState();
+  elements.chatActorSelect.innerHTML = state.characters
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+    .join("");
+  elements.chatActorSelect.value = state.chatActorId;
+
+  const targets = state.characters.filter((character) => character.id !== state.chatActorId);
+  elements.chatTargetSelect.innerHTML = targets
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+    .join("");
+  elements.chatTargetSelect.value = state.chatSelectedId;
 }
 
 function renderChatThread(thread) {
@@ -1103,12 +1137,13 @@ function renderChatThread(thread) {
   return items.join("");
 }
 
-async function sendRelationshipChat(message, targetId) {
+async function sendRelationshipChat(message, actorId, targetId) {
+  const actor = getCharacter(actorId);
   const target = getCharacter(targetId);
-  const relation = getRelation("player", targetId);
-  const thread = getChatThread(targetId);
-  const chatMeta = getChatMeta(targetId);
-  const battleBundle = getBattleRecordBundle(targetId);
+  const relation = getRelation(actorId, targetId);
+  const thread = getChatThread(actorId, targetId);
+  const chatMeta = getChatMeta(actorId, targetId);
+  const battleBundle = actorId === "player" ? getBattleRecordBundle(targetId) : getEmptyBattleRecordBundle();
   const delta = analyzeChatMessageEffect(message, relation);
   const inferredTopic = inferConversationTopic(message, target);
 
@@ -1126,6 +1161,7 @@ async function sendRelationshipChat(message, targetId) {
   if (canUseApi()) {
     try {
       replyPayload = await generateAiRelationshipReply({
+        actor,
         target,
         relation,
         playerMessage: message,
@@ -1140,7 +1176,18 @@ async function sendRelationshipChat(message, targetId) {
     }
   }
 
-  const replyText = replyPayload?.reply || generateBattleAwareRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
+  const rawReplyText = replyPayload?.reply || generateBattleAwareRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
+  const diversifiedReply = diversifyRelationshipReply({
+    actorId,
+    targetId,
+    target,
+    relation,
+    replyText: rawReplyText,
+    inferredTopic,
+    chatMeta,
+    battleBundle,
+  });
+  const replyText = diversifiedReply.text;
   thread.push({
     id: createId(),
     sender: "character",
@@ -1150,14 +1197,15 @@ async function sendRelationshipChat(message, targetId) {
 
   relation.lastMemory = replyPayload?.memoryHint || buildChatMemoryHint(target, delta);
   relation.title = resolveRelationshipTitle(relation);
-  updateChatMeta(targetId, {
+  updateChatMeta(actorId, targetId, {
     userMessage: message,
     replyText,
     inferredTopic,
     moveType: replyPayload?.moveType || "local",
     nextHook: replyPayload?.nextHook || "",
+    anchorKey: diversifiedReply.anchorKey || "",
   });
-  saveMemory(targetId, `会話: ${target.name}`, relation.lastMemory);
+  saveMemory(targetId, `会話: ${actor?.name || "誰か"} → ${target.name}`, relation.lastMemory, actorId);
   saveState();
 }
 
@@ -1201,14 +1249,14 @@ function analyzeChatMessageEffect(message, relation) {
   return delta;
 }
 
-function generateLocalRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
+function generateLocalRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
   const warm = relation.friendship >= 24;
   const hostile = relation.rivalry >= 24 || relation.caution >= 24;
   const respectful = relation.respect >= 18;
   const voice = archetypeVoices[target.archetype] || archetypeVoices.cool;
   const lastMemory = relation.lastMemory || "";
   const recentMemories = getRelevantMemories(target.id, 2);
-  const recentThread = getChatThread(target.id).slice(-4).map((item) => item.text).join(" ");
+  const recentThread = getChatThread(actor.id, target.id).slice(-4).map((item) => item.text).join(" ");
   const conversationMove = chooseLocalConversationMove(target, relation, chatMeta, inferredTopic);
   const forwardHook = buildForwardHook(target, relation, inferredTopic, conversationMove);
 
@@ -1269,7 +1317,7 @@ function generateLocalRelationshipReply(target, relation, message, delta, chatMe
   return `${voice.resolve} でも、今の話は覚えておく。言葉は短くても、残るものは案外大きい。${forwardHook}`;
 }
 
-function generateBattleAwareRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
+function generateBattleAwareRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
   const lastBattle = battleBundle?.last;
   const battleTalk = inferredTopic === "battle" || /勝|負|圧勝|惨敗|接戦|前の戦い|この前の戦い/.test(message);
 
@@ -1290,7 +1338,7 @@ function generateBattleAwareRelationshipReply(target, relation, message, delta, 
     return `勝敗だけ見れば前は私が上だった。でも、あなたの動きはちゃんと残ってる。だから軽くは見ていない。${forwardHook}`;
   }
 
-  return generateLocalRelationshipReply(target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
+  return generateLocalRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
 }
 
 function buildChatMemoryHint(target, delta) {
@@ -1310,11 +1358,15 @@ function buildChatMemoryHint(target, delta) {
 }
 
 function chooseLocalConversationMove(target, relation, chatMeta, inferredTopic) {
-  if (relation.rivalry >= 24) return "challenge";
-  if (relation.friendship >= 24 && chatMeta.turns >= 3) return "invite";
-  if (inferredTopic === "battle" || inferredTopic === "technique") return "ask";
+  const recentTopics = chatMeta.recentTopics || [];
+  const repeatedTopic = recentTopics.slice(-2).every((topic) => topic && topic === inferredTopic);
+  if (relation.rivalry >= 24 && chatMeta.lastMove !== "challenge") return "challenge";
+  if (relation.friendship >= 24 && chatMeta.turns >= 3 && chatMeta.lastMove !== "invite") return "invite";
+  if (inferredTopic === "battle" && chatMeta.lastMove !== "reflect") return relation.respect >= 18 ? "reflect" : "ask";
+  if (inferredTopic === "technique" && chatMeta.lastMove !== "reveal") return "reveal";
+  if (repeatedTopic) return chatMeta.lastMove === "ask" ? "reveal" : "ask";
   if ((chatMeta.turns || 0) % 3 === 1) return "reveal";
-  if (relation.respect >= 18) return "reflect";
+  if (relation.respect >= 18 && chatMeta.lastMove !== "reflect") return "reflect";
   return "ask";
 }
 
@@ -1367,8 +1419,8 @@ function inferConversationTopic(message, target) {
   return "general";
 }
 
-function getChatMeta(targetId) {
-  const key = getChatKey(targetId);
+function getChatMeta(actorId, targetId) {
+  const key = getChatKey(actorId, targetId);
   if (!state.chatMeta[key]) {
     state.chatMeta[key] = {
       turns: 0,
@@ -1376,6 +1428,8 @@ function getChatMeta(targetId) {
       lastMove: "",
       lastHook: "",
       recentTopics: [],
+      recentAnchors: [],
+      recentReplySignatures: [],
       lastUserMessage: "",
       lastReply: "",
     };
@@ -1383,13 +1437,15 @@ function getChatMeta(targetId) {
   return state.chatMeta[key];
 }
 
-function updateChatMeta(targetId, { userMessage, replyText, inferredTopic, moveType, nextHook }) {
-  const meta = getChatMeta(targetId);
+function updateChatMeta(actorId, targetId, { userMessage, replyText, inferredTopic, moveType, nextHook, anchorKey }) {
+  const meta = getChatMeta(actorId, targetId);
   meta.turns += 1;
   meta.lastTopic = inferredTopic || meta.lastTopic || "general";
   meta.lastMove = moveType || meta.lastMove || "";
   meta.lastHook = nextHook || "";
   meta.recentTopics = [...(meta.recentTopics || []), inferredTopic || "general"].slice(-6);
+  meta.recentAnchors = [...(meta.recentAnchors || []), anchorKey || ""].filter(Boolean).slice(-6);
+  meta.recentReplySignatures = [...(meta.recentReplySignatures || []), generateReplySignature(replyText || "")].filter(Boolean).slice(-6);
   meta.lastUserMessage = userMessage || "";
   meta.lastReply = replyText || "";
 }
@@ -1399,6 +1455,120 @@ function splitCommaLikeText(value) {
     .split(/[、,，\/／]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function collectCharacterAnchors(target) {
+  const anchors = [];
+  const pushAnchor = (key, topic, label, value) => {
+    if (!value) return;
+    anchors.push({ key, topic, label, value: String(value).trim() });
+  };
+
+  pushAnchor("ability", "battle", "能力", target.ability);
+  pushAnchor("style", "battle", "戦闘スタイル", target.style);
+  pushAnchor("weakness", "battle", "弱点", target.weakness);
+  pushAnchor("ultimate", "battle", "奥義", target.ultimate);
+  pushAnchor("faction", "faction", "所属", target.faction);
+  pushAnchor("origin", "history", "出自", target.origin);
+  pushAnchor("personality", "emotion", "性格", target.personality);
+  pushAnchor("tone", "emotion", "口調", target.tone);
+  pushAnchor("favoritePhrase", "speech", "好きな言い回し", target.favoritePhrase);
+  pushAnchor("hatedPhrase", "speech", "嫌いな言い回し", target.hatedPhrase);
+  pushAnchor("likes", "daily", "好きなもの", splitCommaLikeText(target.likes)[0]);
+  pushAnchor("dislikes", "daily", "嫌いなもの", splitCommaLikeText(target.dislikes)[0]);
+  pushAnchor("hobbies", "daily", "趣味", splitCommaLikeText(target.hobbies)[0]);
+  pushAnchor("mannerisms", "speech", "癖", target.mannerisms);
+  pushAnchor("notes", "history", "備考", firstSentence(target.notes));
+
+  (target.techniques || []).slice(0, 3).forEach((technique, index) => {
+    pushAnchor(`technique_${index}`, "technique", "技", technique.name);
+    pushAnchor(`technique_effect_${index}`, "technique", "技の効果", technique.effect);
+  });
+
+  return anchors.filter((item) => item.value);
+}
+
+function firstSentence(value) {
+  return String(value || "")
+    .split(/[。.!?\n]/)
+    .map((item) => item.trim())
+    .find(Boolean) || "";
+}
+
+function generateReplySignature(text) {
+  return normalizeTechniqueText(String(text || "")).slice(0, 48);
+}
+
+function calculateReplySimilarity(left, right) {
+  const a = new Set((left || "").match(/.{1,2}/g) || []);
+  const b = new Set((right || "").match(/.{1,2}/g) || []);
+  if (!a.size || !b.size) return 0;
+  const overlap = [...a].filter((item) => b.has(item)).length;
+  return overlap / Math.max(a.size, b.size);
+}
+
+function selectCharacterAnchor(target, inferredTopic, chatMeta) {
+  const anchors = collectCharacterAnchors(target);
+  const recentAnchors = new Set(chatMeta.recentAnchors || []);
+  const byTopic = anchors.filter((item) => item.topic === inferredTopic && !recentAnchors.has(item.key));
+  if (byTopic.length) return byTopic[0];
+  const fresh = anchors.find((item) => !recentAnchors.has(item.key));
+  return fresh || anchors[0] || null;
+}
+
+function buildAnchorSentence(target, anchor) {
+  if (!anchor) return "";
+  const name = target.name;
+  switch (anchor.label) {
+    case "技":
+      return `${name}はふっと目を細める。「${anchor.value}の話をされると、さすがに無視はできないな」`;
+    case "趣味":
+      return `少しだけ空気がやわらぐ。「${anchor.value}のことなら、戦い抜きでも話せるかもしれない」`;
+    case "所属":
+      return `${name}は一拍だけ間を置いた。「${anchor.value}にいる以上、その話は私にとって軽くない」`;
+    case "出自":
+      return `${name}の声音がわずかに変わる。「${anchor.value}……そこに触れるなら、少しはちゃんと話してもいい」`;
+    case "好きなもの":
+      return `ふと表情がほどける。「${anchor.value}の話を出されると、さすがに調子が狂うな」`;
+    case "嫌いなもの":
+      return `${name}は肩をすくめる。「${anchor.value}だけは今でも好きになれない」`;
+    case "能力":
+      return `${name}は指先を見つめた。「${anchor.value}って、言葉にすると案外ごまかせないものだ」`;
+    default:
+      return `${name}は視線を揺らす。「${anchor.value}……そのあたりが、今の私を形作ってるのかもしれない」`;
+  }
+}
+
+function diversifyRelationshipReply({ actorId, targetId, target, replyText, inferredTopic, chatMeta }) {
+  const thread = getChatThread(actorId, targetId);
+  const recentCharacterReplies = thread
+    .filter((item) => item.sender === "character")
+    .slice(-3)
+    .map((item) => item.text);
+  const signature = generateReplySignature(replyText);
+  const tooShort = String(replyText || "").length < 26;
+  const tooGeneric = /(そう|悪くない|話は聞いている|次の言葉次第|覚えている)/.test(replyText || "");
+  const tooSimilar = recentCharacterReplies.some((item) => calculateReplySimilarity(signature, generateReplySignature(item)) >= 0.7);
+
+  if (!tooShort && !tooGeneric && !tooSimilar) {
+    return { text: replyText, anchorKey: "" };
+  }
+
+  const anchor = selectCharacterAnchor(target, inferredTopic, chatMeta);
+  if (!anchor) {
+    return { text: replyText, anchorKey: "" };
+  }
+
+  const anchorSentence = buildAnchorSentence(target, anchor);
+  const normalizedReply = String(replyText || "").trim();
+  const merged = tooShort || tooSimilar
+    ? `${anchorSentence} ${normalizedReply}`.trim()
+    : `${normalizedReply} ${anchorSentence}`.trim();
+
+  return {
+    text: merged,
+    anchorKey: anchor.key,
+  };
 }
 
 function renderIntervalChoices() {
@@ -2006,7 +2176,7 @@ function generateFallbackBattleSpeech(player, battleSpeech, relation) {
 
 async function generateAiTurnText(context) {
   const relation = context.relation;
-  const historySnapshot = buildRelationshipHistorySnapshot(context.enemy.id, {
+  const historySnapshot = buildRelationshipHistorySnapshot("player", context.enemy.id, {
     includeBattle: true,
     battle: context.battle,
   });
@@ -2109,10 +2279,15 @@ async function generateAiTurnText(context) {
   return JSON.parse(text);
 }
 
-async function generateAiRelationshipReply({ target, relation, playerMessage, thread, chatMeta, battleBundle, inferredTopic }) {
-  const historySnapshot = buildRelationshipHistorySnapshot(target.id, {
+async function generateAiRelationshipReply({ actor, target, relation, playerMessage, thread, chatMeta, battleBundle, inferredTopic }) {
+  const historySnapshot = buildRelationshipHistorySnapshot(actor.id, target.id, {
     includeBattle: false,
   });
+  const recentCharacterReplies = thread
+    .filter((item) => item.sender === "character")
+    .slice(-3)
+    .map((item) => item.text);
+  const availableAnchors = collectCharacterAnchors(target).slice(0, 10);
   const prompt = [
     "Generate a JSON object only.",
     "You are writing a Japanese messenger-app reply for an original character relationship game.",
@@ -2125,6 +2300,7 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     "Output keys:",
     "reply, moodNote, memoryHint, moveType, nextHook",
     "",
+    `Actor character: ${compactCharacterSheet(actor)}`,
     `Target character: ${compactCharacterSheet(target)}`,
     `Relationship: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
     `Last remembered event: ${relation.lastMemory}`,
@@ -2134,12 +2310,17 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
     `Inferred topic: ${inferredTopic}`,
     `Player message: ${playerMessage}`,
     `Recent thread: ${JSON.stringify(thread.slice(-6))}`,
+    `Recent character replies to avoid repeating: ${JSON.stringify(recentCharacterReplies)}`,
+    `Character-specific anchors you may use: ${JSON.stringify(availableAnchors)}`,
     "",
     "Requirements:",
     "- reply should be 2 to 4 Japanese sentences with light-novel flavor, while still fitting a messenger app.",
+    "- reply is the target character speaking to the actor character above. Do not confuse their identities.",
     "- reply must do one clear forward move: ask a specific follow-up question, reveal a new detail, propose an action, or revisit a remembered event with new nuance.",
     "- avoid repeating the same emotional phrase as the last few replies.",
     "- use concrete details from memories, hobbies, techniques, faction, origin, speech habits, or prior battles when possible.",
+    "- when possible, bring in at least one character-specific anchor so different characters do not sound interchangeable.",
+    "- do not reuse the same hook or sentence opening as the immediately previous character reply.",
     "- when prior battle results are relevant, understand who won or lost, whether it was close or decisive, and let that affect the tone naturally.",
     "- never confuse who won and who lost in previous battles.",
     "- moodNote should summarize the emotional reaction in one sentence.",
@@ -2150,8 +2331,8 @@ async function generateAiRelationshipReply({ target, relation, playerMessage, th
 
   const text = await fetchCohereJson({
     model: state.settings.model,
-    temperature: Math.max(0.5, state.settings.temperature),
-    maxTokens: 320,
+    temperature: Math.max(0.85, state.settings.temperature),
+    maxTokens: 420,
     responseSchema: {
       type: "object",
       required: ["reply", "moodNote", "memoryHint", "moveType", "nextHook"],
@@ -2238,17 +2419,17 @@ function compactCharacterSheet(character) {
   });
 }
 
-function buildRelationshipHistorySnapshot(targetId, options = {}) {
-  const relation = getRelation("player", targetId);
-  const chatMeta = getChatMeta(targetId);
-  const battleBundle = getBattleRecordBundle(targetId);
+function buildRelationshipHistorySnapshot(actorId, targetId, options = {}) {
+  const relation = getRelation(actorId, targetId);
+  const chatMeta = getChatMeta(actorId, targetId);
+  const battleBundle = actorId === "player" ? getBattleRecordBundle(targetId) : getEmptyBattleRecordBundle();
   const memories = getRelevantMemories(targetId, 6)
     .map((memory) => ({
       title: memory.title,
       body: memory.body,
       timestamp: memory.timestamp,
     }));
-  const chatDigest = getChatThread(targetId)
+  const chatDigest = getChatThread(actorId, targetId)
     .slice(-8)
     .map((message) => ({
       sender: message.sender,
@@ -2310,6 +2491,19 @@ function getBattleRecordBundle(targetId) {
     closeBattles,
     last,
     recent: records.slice(0, 5),
+  };
+}
+
+function getEmptyBattleRecordBundle() {
+  return {
+    total: 0,
+    wins: 0,
+    losses: 0,
+    decisiveWins: 0,
+    decisiveLosses: 0,
+    closeBattles: 0,
+    last: null,
+    recent: [],
   };
 }
 
@@ -2502,20 +2696,36 @@ function applyRelationDelta(relation, delta) {
   relation.caution = clamp(relation.caution, 0, 100);
 }
 
-function getChatKey(targetId) {
-  return `player:${targetId}`;
+function getChatKey(actorId, targetId) {
+  return `${actorId}:${targetId}`;
 }
 
-function getChatThread(targetId) {
-  const key = getChatKey(targetId);
+function getChatThread(actorId, targetId) {
+  const key = getChatKey(actorId, targetId);
   if (!state.chats[key]) {
     state.chats[key] = [];
   }
   return state.chats[key];
 }
 
+function getChatActorCharacter() {
+  return getCharacter(state.chatActorId);
+}
+
 function getChatTargetCharacter() {
   return getCharacter(state.chatSelectedId);
+}
+
+function ensureChatPairState() {
+  const actorFallback = getCharacter(state.chatActorId) || getCharacter("player") || state.characters[0] || null;
+  if (!actorFallback) return;
+  state.chatActorId = actorFallback.id;
+
+  const targets = state.characters.filter((character) => character.id !== state.chatActorId);
+  const fallbackTarget = targets[0] || null;
+  if (!getCharacter(state.chatSelectedId) || state.chatSelectedId === state.chatActorId) {
+    state.chatSelectedId = fallbackTarget?.id || "";
+  }
 }
 
 function ensureSelectedCharacterState() {
@@ -2526,9 +2736,7 @@ function ensureSelectedCharacterState() {
     state.selectedEnemyId = fallbackEnemy?.id || "";
   }
 
-  if (!getCharacter(state.chatSelectedId) || state.chatSelectedId === "player") {
-    state.chatSelectedId = fallbackEnemy?.id || "";
-  }
+  ensureChatPairState();
 
   if (!getCharacter(state.editorCharacterId)) {
     state.editorCharacterId = "player";
@@ -2740,9 +2948,20 @@ function cleanupCharacterData(characterId) {
   if (state.battle?.enemyId === characterId) {
     state.battle = null;
   }
-  delete state.chats[getChatKey(characterId)];
+  Object.keys(state.chats).forEach((key) => {
+    if (key.includes(`${characterId}:`) || key.endsWith(`:${characterId}`)) {
+      delete state.chats[key];
+    }
+  });
   delete state.battleRecords[characterId];
-  delete state.chatMeta[getChatKey(characterId)];
+  Object.keys(state.chatMeta).forEach((key) => {
+    if (key.includes(`${characterId}:`) || key.endsWith(`:${characterId}`)) {
+      delete state.chatMeta[key];
+    }
+  });
+  if (state.chatActorId === characterId) {
+    state.chatActorId = "player";
+  }
   if (state.chatSelectedId === characterId) {
     const fallback = state.characters.find((character) => character.id !== "player" && character.id !== characterId);
     state.chatSelectedId = fallback?.id || "";
