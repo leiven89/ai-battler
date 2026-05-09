@@ -1584,6 +1584,20 @@ async function resolveTurn(action, chatCategory, customBattleLine = "") {
       label: "相手反応",
       text: `${enemy.name}「${aiText?.enemyReaction || generateFallbackReactionLine(enemy, battleSpeech.category || "resolve", relation, battleSpeech.line)}」`,
     });
+  } else {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の言葉`,
+      text: aiText?.enemyInterjection || `${enemy.name}「${generateBattleInterjection(enemy, relation, playerOutcome, battle)}」`,
+    });
+  }
+
+  if (battleSpeech || enemyOutcome) {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の返し`,
+      text: `${enemy.name}「${generateBattleInterjection(enemy, relation, playerOutcome, battle)}」`,
+    });
   }
 
   if (enemyOutcome) {
@@ -1596,6 +1610,14 @@ async function resolveTurn(action, chatCategory, customBattleLine = "") {
       type: "system",
       label: "戦況",
       text: aiText?.counterSummary || enemyOutcome.summary,
+    });
+  }
+
+  if (enemyOutcome) {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の追撃台詞`,
+      text: `${enemy.name}「${generateCounterAfterLine(enemy, relation, enemyOutcome, battle)}」`,
     });
   }
 
@@ -1851,7 +1873,7 @@ function enemyCounterAction(attacker, defender, relation, turn, half, playerStat
     mentalShift,
     playerStateAfter: playerState,
     enemyStateAfter: enemyState,
-    log: `${attacker.name}は${attacker.ability}を鋭く走らせ、${defender.name}へ反撃する。${delta > 8 ? `「${voice.taunt}」` : ""} ${delta > 8
+    log: `${attacker.name}は${attacker.ability}を鋭く走らせ、${defender.name}へ反撃する。\n${attacker.name}「${delta > 8 ? voice.taunt : voice.resolve}」\n${delta > 8
       ? `${defender.name}は対応が一瞬遅れ、痛烈な一撃を受けた。`
       : `${defender.name}は急所を外したが、それでも衝撃を受け止めきれない。`}`,
     summary: `${defender.name}に${damage >= 16 ? "大" : "中"}ダメージ。${attacker.name}のSTAMINA -${staminaCost}。${defender.name}のMENTAL ${mentalShift}。`,
@@ -1891,6 +1913,56 @@ function buildBattleSpeechInput(chatCategory, customBattleLine, lastChatCategory
     delta: computeChatDelta(chatCategory, lastChatCategory),
     custom: false,
   };
+}
+
+function generateBattleInterjection(enemy, relation, playerOutcome, battle) {
+  const voice = archetypeVoices[enemy.archetype] || archetypeVoices.cool;
+  const pressureHigh = playerOutcome.damage >= 18;
+  const cautious = relation.caution >= 22;
+  const rivalrous = relation.rivalry >= 22;
+
+  if (pressureHigh && cautious) {
+    return `${voice.resolve} ……今の一手、軽く見ていたら危なかった。`;
+  }
+
+  if (pressureHigh && rivalrous) {
+    return `${voice.taunt} その程度じゃ終われないわ。もっと見せなさい。`;
+  }
+
+  if (battle.half === "back" && rivalrous) {
+    return `熱が上がる。${voice.resolve} ここからが本番よ。`;
+  }
+
+  if (playerOutcome.triggeredTechnique) {
+    return `${playerOutcome.triggeredTechnique.technique.name}……なるほど。そう来るのね。`;
+  }
+
+  return `${voice.resolve} まだ、読み切れない。だからこそ面白い。`;
+}
+
+function generateCounterAfterLine(enemy, relation, enemyOutcome, battle) {
+  const voice = archetypeVoices[enemy.archetype] || archetypeVoices.cool;
+  const heavyHit = enemyOutcome.damage >= 16;
+  const rivalryHigh = relation.rivalry >= 28;
+  const backHalf = battle.half === "back";
+
+  if (heavyHit && rivalryHigh) {
+    return `${voice.taunt} ほら、そんな顔をするな。ここからが本番だろう？`;
+  }
+
+  if (heavyHit && backHalf) {
+    return `${voice.resolve} まだ倒れないなら、次はもっと深く踏み込むだけだ。`;
+  }
+
+  if (relation.friendship >= 24) {
+    return `……いい反応だ。簡単には折れないって、ちゃんと分かってる。`;
+  }
+
+  if (relation.caution >= 24) {
+    return `${voice.resolve} 今ので終わったと思わないで。次はもっと正確に仕留める。`;
+  }
+
+  return `${voice.resolve} その程度じゃ、まだ私を黙らせられない。`;
 }
 
 function inferBattleSpeechCategory(line, fallbackCategory = "resolve") {
@@ -1934,7 +2006,7 @@ async function generateAiTurnText(context) {
     "Strongly prioritize consistency with previous battles, chats, and memories.",
     "",
     "Output keys:",
-    'battleLog, battleSummary, chatLine, enemyReaction, counterLog, counterSummary, relationNote, memoryHint',
+    'battleLog, battleSummary, chatLine, enemyReaction, enemyInterjection, counterLog, counterSummary, relationNote, memoryHint',
     "",
     `Turn: ${context.battle.turn}`,
     `Half: ${context.battle.half}`,
@@ -1972,12 +2044,14 @@ async function generateAiTurnText(context) {
       : "Enemy counter outcome: none",
     "",
     "Requirements:",
-    "- battleLog should narrate the player's action with novel-like dramatic texture.",
+    "- battleLog should narrate the player's action with novel-like dramatic texture and should usually include spoken lines from either side.",
     "- battleSummary should summarize the numeric result naturally but still read like fiction.",
     "- if Direct battle line is present, chatLine should preserve its intent and wording instead of replacing it with a category template.",
     "- chatLine should sound like the player character.",
     "- enemyReaction should sound like the enemy character and answer the emotional content of the line.",
-    "- counterLog should narrate the enemy counterattack with momentum and cinematic clarity.",
+    "- enemyInterjection should provide a spoken reaction from the enemy about the battle situation itself, not just repeat enemyReaction.",
+    "- enemyInterjection should feel like part of an ongoing verbal exchange and should move the tension forward.",
+    "- counterLog should narrate the enemy counterattack with momentum, cinematic clarity, and should usually include the enemy speaking.",
     "- counterSummary should summarize its numeric result naturally.",
     "- relationNote should describe relationship/emotional movement in one sentence.",
     "- memoryHint should be a short sentence suitable for a memory log.",
@@ -1994,6 +2068,7 @@ async function generateAiTurnText(context) {
         "battleSummary",
         "chatLine",
         "enemyReaction",
+        "enemyInterjection",
         "counterLog",
         "counterSummary",
         "relationNote",
@@ -2004,6 +2079,7 @@ async function generateAiTurnText(context) {
         battleSummary: { type: "string" },
         chatLine: { type: "string" },
         enemyReaction: { type: "string" },
+        enemyInterjection: { type: "string" },
         counterLog: { type: "string" },
         counterSummary: { type: "string" },
         relationNote: { type: "string" },
@@ -2225,18 +2301,20 @@ function openingLine(player, enemy, relation) {
 }
 
 function actionFlavorText(attacker, defender, action, advantage, severity, triggeredTechnique) {
+  const attackerLine = generateActionLine(attacker, triggeredTechnique, advantage);
+  const defenderLine = generateDefenseLine(defender, advantage);
   const techniqueLead = triggeredTechnique
     ? triggeredTechnique.matchedBy === "exact-name"
-      ? `${attacker.name}は技「${triggeredTechnique.technique.name}」を発動し、${action}。`
-      : `${attacker.name}は${action}。その動きは技「${triggeredTechnique.technique.name}」として形を結ぶ。`
-    : `${attacker.name}は${action}。`;
+      ? `${attacker.name}は技「${triggeredTechnique.technique.name}」を発動した。\n${attacker.name}「${attackerLine}」\n${action}`
+      : `${attacker.name}は${action}。\nその動きは技「${triggeredTechnique.technique.name}」として形を結ぶ。\n${attacker.name}「${attackerLine}」`
+    : `${attacker.name}は${action}。\n${attacker.name}「${attackerLine}」`;
   if (advantage > 10) {
-    return `${techniqueLead} 動きは迷いなく噛み合い、${defender.name}へ${severity}刃を通した。`;
+    return `${techniqueLead}\n${defender.name}「${defenderLine}」\n動きは迷いなく噛み合い、${defender.name}へ${severity}刃を通した。`;
   }
   if (advantage > 0) {
-    return `${techniqueLead} 完全な直撃ではないが、${defender.name}の構えを崩しつつ傷を刻む。`;
+    return `${techniqueLead}\n${defender.name}「${defenderLine}」\n完全な直撃ではないが、${defender.name}の構えを崩しつつ傷を刻む。`;
   }
-  return `${techniqueLead} だが${defender.name}も反応し、致命には届かないまま火花だけが散った。`;
+  return `${techniqueLead}\n${defender.name}「${defenderLine}」\nだが${defender.name}も反応し、致命には届かないまま火花だけが散った。`;
 }
 
 function keywordScore(action, attacker, triggeredTechnique = null) {
@@ -2248,6 +2326,31 @@ function keywordScore(action, attacker, triggeredTechnique = null) {
   if (action.includes("守") || action.includes("庇う")) score += attacker.stats.mind * 0.06;
   if (triggeredTechnique) score += 6;
   return score;
+}
+
+function generateActionLine(character, triggeredTechnique, advantage) {
+  const voice = archetypeVoices[character.archetype] || archetypeVoices.cool;
+  if (triggeredTechnique) {
+    if (advantage > 8) return `${triggeredTechnique.technique.name}で押し切る。`;
+    if (advantage > 0) return `${triggeredTechnique.technique.name}、通す。`;
+    return `${triggeredTechnique.technique.name}……まだ浅いか。`;
+  }
+  if (advantage > 8) return voice.resolve;
+  if (advantage > 0) return "逃がさない。";
+  return "……読まれたか。";
+}
+
+function generateDefenseLine(character, advantage) {
+  const voice = archetypeVoices[character.archetype] || archetypeVoices.cool;
+  if (advantage > 10) {
+    if (character.archetype === "proud") return "今のは、少しだけ見事だったわ。";
+    if (character.archetype === "gentle") return "っ……でも、まだ倒れないよ。";
+    return "その一撃、軽くは見られない。";
+  }
+  if (advantage > 0) {
+    return "まだ、踏み込みが甘い。";
+  }
+  return voice.taunt;
 }
 
 function riskScore(action) {

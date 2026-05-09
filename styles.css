@@ -568,6 +568,11 @@ input[type="range"] {
   margin-bottom: 6px;
 }
 
+.log-entry div,
+.chat-bubble div {
+  white-space: pre-wrap;
+}
+
 .heat-meter {
   display: inline-flex;
   align-items: center;
