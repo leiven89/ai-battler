@@ -554,6 +554,8 @@ function normalizeCommunityPost(post) {
       archetype: normalizeText(post?.authorSnapshot?.archetype) || "cool",
       tone: normalizeText(post?.authorSnapshot?.tone),
       faction: normalizeText(post?.authorSnapshot?.faction),
+      snsHandle: normalizeText(post?.authorSnapshot?.snsHandle),
+      snsBio: normalizeText(post?.authorSnapshot?.snsBio),
       imageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.imageDataUrl),
       snsImageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.snsImageDataUrl),
       chatImageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.chatImageDataUrl),
@@ -566,9 +568,14 @@ function normalizeCommunityPost(post) {
 
 function normalizeCommunityComment(comment) {
   return {
+    id: normalizeText(comment.id),
     commenterId: normalizeText(comment.commenterId),
+    profileId: normalizeText(comment.profileId),
+    profileName: normalizeText(comment.profileName),
     text: normalizeText(comment.text),
     timestamp: normalizeText(comment.timestamp) || new Date().toISOString(),
+    parentCommentId: normalizeText(comment.parentCommentId),
+    replyToName: normalizeText(comment.replyToName),
     delta: {
       friendship: clampNumber(comment?.delta?.friendship, -20, 20, 0),
       rivalry: clampNumber(comment?.delta?.rivalry, -20, 20, 0),
@@ -582,6 +589,8 @@ function normalizeCommunityComment(comment) {
       archetype: normalizeText(comment?.commenterSnapshot?.archetype) || "cool",
       tone: normalizeText(comment?.commenterSnapshot?.tone),
       faction: normalizeText(comment?.commenterSnapshot?.faction),
+      snsHandle: normalizeText(comment?.commenterSnapshot?.snsHandle),
+      snsBio: normalizeText(comment?.commenterSnapshot?.snsBio),
       imageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.imageDataUrl),
       snsImageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.snsImageDataUrl),
       chatImageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.chatImageDataUrl),

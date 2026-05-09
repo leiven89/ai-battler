@@ -280,6 +280,16 @@
               勝利時の態度
               <textarea name="victoryStyle" rows="2"></textarea>
             </label>
+            <div class="profile-grid wide">
+              <label>
+                SNSハンドル
+                <input type="text" name="snsHandle" placeholder="@rei_shadow">
+              </label>
+              <label class="wide">
+                SNSプロフィール
+                <textarea name="snsBio" rows="3" placeholder="キャラ本人が書いていそうなプロフィール文"></textarea>
+              </label>
+            </div>
             <label class="wide">
               備考
               <textarea name="notes" rows="4" placeholder="設定メモ、裏設定、関係の方針、口調メモなど"></textarea>
@@ -516,6 +526,7 @@
               </div>
             </div>
             <p class="helper-text" id="community-feed-status">公開投稿: 読み込み前</p>
+            <div id="charaverse-profile-panel" class="charaverse-profile-panel hidden"></div>
             <div id="charaverse-timeline" class="charaverse-timeline"></div>
           </article>
         </div>

@@ -149,6 +149,8 @@ function makeCharacter(overrides = {}) {
     gratitudeStyle: "",
     defeatStyle: "",
     victoryStyle: "",
+    snsHandle: "",
+    snsBio: "",
     notes: "",
     imageDataUrl: "",
     snsImageDataUrl: "",
@@ -438,6 +440,9 @@ const defaultState = {
   communityCharacters: [],
   communityPosts: [],
   chatMeta: {},
+  charaverseFollows: {},
+  charaverseProfileView: null,
+  charaverseReplyContext: null,
   battle: null,
 };
 
@@ -510,6 +515,7 @@ const elements = {
   charaverseRefreshCommunityInline: document.getElementById("charaverse-refresh-community-inline"),
   charaversePreview: document.getElementById("charaverse-preview"),
   communityFeedStatus: document.getElementById("community-feed-status"),
+  charaverseProfilePanel: document.getElementById("charaverse-profile-panel"),
   charaverseTimeline: document.getElementById("charaverse-timeline"),
   relationsList: document.getElementById("relations-list"),
   memoriesList: document.getElementById("memories-list"),
@@ -875,6 +881,23 @@ function bindCharaverse() {
   });
 
   elements.charaverseTimeline.addEventListener("click", async (event) => {
+    const profileTrigger = event.target.closest("[data-profile-open]");
+    if (profileTrigger) {
+      handleProfileOpen(profileTrigger);
+      return;
+    }
+
+    const replyTrigger = event.target.closest("[data-charaverse-reply]");
+    if (replyTrigger) {
+      const post = getAnyCharaversePost(replyTrigger.dataset.charaverseReplyPost);
+      const comment = findCommentInPost(post, replyTrigger.dataset.charaverseReply);
+      if (post && comment) {
+        const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || { name: "誰か" };
+        setReplyContext(post.id, comment.id, commenter.name || "誰か");
+      }
+      return;
+    }
+
     const likeButton = event.target.closest("[data-charaverse-like]");
     if (likeButton) {
       await handleCharaverseLike(likeButton.dataset.charaverseLike);
@@ -890,6 +913,42 @@ function bindCharaverse() {
     const deleteButton = event.target.closest("[data-charaverse-delete]");
     if (deleteButton) {
       deleteCharaversePost(deleteButton.dataset.charaverseDelete);
+    }
+  });
+
+  elements.charaverseProfilePanel.addEventListener("click", async (event) => {
+    const closeButton = event.target.closest("[data-charaverse-profile-close]");
+    if (closeButton) {
+      closeCharaverseProfile();
+      return;
+    }
+
+    const followButton = event.target.closest("[data-charaverse-follow]");
+    if (followButton) {
+      toggleProfileFollow(followButton.dataset.charaverseFollow);
+      return;
+    }
+
+    const profileTrigger = event.target.closest("[data-profile-open]");
+    if (profileTrigger) {
+      handleProfileOpen(profileTrigger);
+      return;
+    }
+
+    const replyTrigger = event.target.closest("[data-charaverse-reply]");
+    if (replyTrigger) {
+      const post = getAnyCharaversePost(replyTrigger.dataset.charaverseReplyPost);
+      const comment = findCommentInPost(post, replyTrigger.dataset.charaverseReply);
+      if (post && comment) {
+        const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || { name: "誰か" };
+        setReplyContext(post.id, comment.id, commenter.name || "誰か");
+      }
+      return;
+    }
+
+    const commentButton = event.target.closest("[data-charaverse-comment]");
+    if (commentButton) {
+      await handleCharaverseManualComment(commentButton.dataset.charaverseComment);
     }
   });
 }
@@ -916,6 +975,7 @@ function renderAll() {
   fillCharaverseComposer();
   renderCommunityStatus();
   renderCharaversePreview();
+  renderCharaverseProfilePanel();
   renderCharaverseTimeline();
   renderRelations();
   renderMemories();
@@ -925,6 +985,164 @@ function renderAll() {
 function renderCommunityStatus() {
   elements.communityStatus.textContent = state.communityStatus || "公開ステータス: 未設定";
   elements.communityFeedStatus.textContent = state.communityFeedStatus || "公開投稿: 未取得";
+}
+
+function renderCharaverseProfilePanel() {
+  const profile = state.charaverseProfileView;
+  if (!profile) {
+    elements.charaverseProfilePanel.classList.add("hidden");
+    elements.charaverseProfilePanel.innerHTML = "";
+    return;
+  }
+
+  const posts = getProfilePosts(profile.key);
+  const viewerId = getProfileViewerId();
+  const following = isFollowingProfile(viewerId, profile.key);
+  const isSelf = profile.key === `character:${viewerId}`;
+
+  elements.charaverseProfilePanel.classList.remove("hidden");
+  elements.charaverseProfilePanel.innerHTML = `
+    <div class="charaverse-profile-hero">
+      <div class="charaverse-profile-main">
+        ${renderAvatarMarkup(getCharacterSnsIcon(profile), profile.name, "sns-profile")}
+        <div class="charaverse-profile-copy">
+          <p class="eyebrow">Profile</p>
+          <h3>${escapeHtml(profile.name)}</h3>
+          <div class="charaverse-profile-handle">${escapeHtml(profile.handle || "@profile")}</div>
+          <p>${escapeHtml(profile.bio)}</p>
+          <div class="charaverse-post-meta">
+            ${profile.title ? `<span class="charaverse-tag">${escapeHtml(profile.title)}</span>` : ""}
+            ${profile.faction ? `<span class="charaverse-tag">${escapeHtml(profile.faction)}</span>` : ""}
+            <span class="charaverse-tag">投稿 ${posts.length}</span>
+          </div>
+        </div>
+      </div>
+      <div class="charaverse-profile-actions">
+        <button class="secondary-btn" type="button" data-charaverse-profile-close="true">閉じる</button>
+        ${isSelf ? "" : `<button class="primary-btn" type="button" data-charaverse-follow="${escapeHtml(profile.key)}">${following ? "フォロー解除" : "フォローする"}</button>`}
+      </div>
+    </div>
+    <div class="charaverse-profile-posts">
+      ${posts.length
+        ? posts.map((post) => renderCharaversePost(post)).join("")
+        : `<div class="charaverse-post-card"><strong>まだ投稿がありません</strong><div>このプロフィールに紐づく投稿はまだありません。</div></div>`}
+    </div>
+  `;
+}
+
+function getCharacterProfileKey(character) {
+  if (!character) return "";
+  return character.isCommunity
+    ? `community-character:${character.communityEntryId || character.id}`
+    : `character:${character.id}`;
+}
+
+function getPostAuthorProfileKey(post) {
+  if (!post) return "";
+  if (post.scope === "community") {
+    return `community-author:${post.profileId || "public"}:${post.authorSnapshot?.id || post.authorId || post.id}`;
+  }
+  return `character:${post.authorId}`;
+}
+
+function getCommenterProfileKey(post, comment) {
+  if (comment?.commenterSnapshot && !getCharacter(comment.commenterId)) {
+    return `community-commenter:${post.profileId || "public"}:${comment.commenterSnapshot.id || comment.commenterId || comment.id}`;
+  }
+  return `character:${comment?.commenterId || ""}`;
+}
+
+function buildProfileDescriptor({ key, character = null, post = null, snapshot = null, profileName = "", profileId = "" }) {
+  const sourceCharacter = character || snapshot || getPostAuthorCharacter(post);
+  return {
+    key,
+    profileId,
+    profileName,
+    name: sourceCharacter?.name || "不明",
+    handle: sourceCharacter?.snsHandle || `@${normalizeTechniqueText(sourceCharacter?.name || "profile").slice(0, 16) || "profile"}`,
+    bio: sourceCharacter?.snsBio || sourceCharacter?.notes || sourceCharacter?.personality || "プロフィールはまだ静かなまま。",
+    title: sourceCharacter?.title || "",
+    archetype: sourceCharacter?.archetype || "cool",
+    faction: sourceCharacter?.faction || "",
+    tone: sourceCharacter?.tone || "",
+    imageDataUrl: sourceCharacter?.imageDataUrl || "",
+    snsImageDataUrl: sourceCharacter?.snsImageDataUrl || sourceCharacter?.imageDataUrl || "",
+    chatImageDataUrl: sourceCharacter?.chatImageDataUrl || sourceCharacter?.snsImageDataUrl || sourceCharacter?.imageDataUrl || "",
+    sourceCharacter,
+  };
+}
+
+function openCharaverseProfile(descriptor) {
+  state.charaverseProfileView = descriptor;
+  saveState();
+  renderAll();
+}
+
+function buildProfileDescriptor({ key, character = null, post = null, snapshot = null, profileName = "", profileId = "" }) {
+  const sourceCharacter = character || snapshot || getPostAuthorCharacter(post);
+  return {
+    key,
+    profileId,
+    profileName,
+    name: sourceCharacter?.name || "荳肴・",
+    handle: sourceCharacter?.snsHandle || snapshot?.snsHandle || `@${normalizeTechniqueText(sourceCharacter?.name || "profile").slice(0, 16) || "profile"}`,
+    bio: sourceCharacter?.snsBio || snapshot?.snsBio || sourceCharacter?.notes || sourceCharacter?.personality || "繝励Ο繝輔ぅ繝ｼ繝ｫ縺ｯ縺ｾ縺髱吶°縺ｪ縺ｾ縺ｾ縲・",
+    title: sourceCharacter?.title || "",
+    archetype: sourceCharacter?.archetype || "cool",
+    faction: sourceCharacter?.faction || "",
+    tone: sourceCharacter?.tone || "",
+    imageDataUrl: sourceCharacter?.imageDataUrl || "",
+    snsImageDataUrl: sourceCharacter?.snsImageDataUrl || sourceCharacter?.imageDataUrl || "",
+    chatImageDataUrl: sourceCharacter?.chatImageDataUrl || sourceCharacter?.snsImageDataUrl || sourceCharacter?.imageDataUrl || "",
+    sourceCharacter,
+  };
+}
+
+function closeCharaverseProfile() {
+  state.charaverseProfileView = null;
+  saveState();
+  renderAll();
+}
+
+function getProfilePosts(profileKey) {
+  return getMergedCharaversePosts()
+    .filter((post) => getPostAuthorProfileKey(post) === profileKey)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+}
+
+function getProfileViewerId() {
+  return state.charaverseComposer.authorId || "player";
+}
+
+function isFollowingProfile(viewerId, profileKey) {
+  return Boolean(state.charaverseFollows?.[`${viewerId}:${profileKey}`]);
+}
+
+function toggleProfileFollow(profileKey) {
+  const viewerId = getProfileViewerId();
+  if (!viewerId || !profileKey || profileKey === `character:${viewerId}`) {
+    return;
+  }
+  const key = `${viewerId}:${profileKey}`;
+  state.charaverseFollows[key] = !state.charaverseFollows[key];
+  saveState();
+  renderAll();
+}
+
+function setReplyContext(postId, commentId, targetName) {
+  state.charaverseReplyContext = {
+    postId,
+    commentId,
+    targetName,
+  };
+  saveState();
+  renderAll();
+}
+
+function clearReplyContext() {
+  state.charaverseReplyContext = null;
+  saveState();
+  renderAll();
 }
 
 function renderHeroSummary() {
@@ -1004,6 +1222,8 @@ function fillCharacterForm(character) {
   form.gratitudeStyle.value = character.gratitudeStyle;
   form.defeatStyle.value = character.defeatStyle;
   form.victoryStyle.value = character.victoryStyle;
+  form.snsHandle.value = character.snsHandle || "";
+  form.snsBio.value = character.snsBio || "";
   form.notes.value = character.notes;
   form.atk.value = character.stats.atk;
   form.spd.value = character.stats.spd;
@@ -1045,6 +1265,8 @@ function formCharacterFromEditor() {
     gratitudeStyle: (form.get("gratitudeStyle") || "").toString(),
     defeatStyle: (form.get("defeatStyle") || "").toString(),
     victoryStyle: (form.get("victoryStyle") || "").toString(),
+    snsHandle: (form.get("snsHandle") || "").toString(),
+    snsBio: (form.get("snsBio") || "").toString(),
     notes: (form.get("notes") || "").toString(),
     imageDataUrl: base.imageDataUrl || "",
     snsImageDataUrl: base.snsImageDataUrl || "",
@@ -1350,14 +1572,17 @@ function renderChatThread(thread, actor, target) {
       items.push(`<div class="chat-dayline">${escapeHtml(day)}</div>`);
       lastDay = day;
     }
-    const speaker = message.sender === "user" ? actor : target;
-    const icon = message.sender === "user" ? getCharacterChatIcon(actor) : getCharacterChatIcon(target);
+    const isActorLine = message.sender === "user";
+    const speaker = isActorLine
+      ? (getCharacter(message.speakerId) || actor)
+      : (getCharacter(message.speakerId) || target);
+    const icon = isActorLine ? getCharacterChatIcon(speaker || actor) : getCharacterChatIcon(speaker || target);
     items.push(`
-      <article class="chat-line ${message.sender === "user" ? "user" : "character"}">
+      <article class="chat-line ${isActorLine ? "user" : "character"}">
         ${renderAvatarMarkup(icon, speaker?.name || "icon", "thread")}
-        <div class="chat-bubble ${message.sender === "user" ? "user" : "character"}">
+        <div class="chat-bubble ${isActorLine ? "user" : "character"}">
           <div>${escapeHtml(message.text)}</div>
-          <span class="chat-bubble-meta">${escapeHtml((speaker?.name || "") + " / " + formatTimeOnly(message.timestamp))}</span>
+          <span class="chat-bubble-meta">${escapeHtml((message.speakerName || speaker?.name || "") + " / " + formatTimeOnly(message.timestamp))}</span>
         </div>
       </article>
     `);
@@ -1441,6 +1666,45 @@ function renderCharaverseTimeline() {
     .join("");
 }
 
+function renderCharaverseComments(post) {
+  const comments = post.comments || [];
+  const byParent = new Map();
+  comments.forEach((comment) => {
+    const parentKey = comment.parentCommentId || "root";
+    if (!byParent.has(parentKey)) {
+      byParent.set(parentKey, []);
+    }
+    byParent.get(parentKey).push(comment);
+  });
+
+  const renderBranch = (parentId = "root", depth = 0) => {
+    const branch = byParent.get(parentId) || [];
+    return branch.map((comment) => {
+      const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || null;
+      const replies = renderBranch(comment.id, depth + 1);
+      return `
+        <div class="charaverse-comment depth-${Math.min(depth, 3)}">
+          <button class="avatar-button" type="button" data-profile-open="true" data-profile-role="commenter" data-post-id="${escapeHtml(post.id)}" data-comment-id="${escapeHtml(comment.id)}">
+            ${renderAvatarMarkup(getCharacterSnsIcon(commenter), commenter?.name || "誰か", "sns-comment")}
+          </button>
+          <div class="charaverse-comment-body">
+            <strong>${escapeHtml(commenter?.name || "誰か")}</strong>
+            ${comment.replyToName ? `<div class="memory-meta">@${escapeHtml(comment.replyToName)} への返信</div>` : ""}
+            <div>${escapeHtml(comment.text)}</div>
+            <div class="charaverse-comment-tools">
+              <span class="chat-bubble-meta">${escapeHtml(formatTimeOnly(comment.timestamp || new Date().toISOString()))}</span>
+              <button class="secondary-btn tiny-btn" type="button" data-charaverse-reply="${escapeHtml(comment.id)}" data-charaverse-reply-post="${escapeHtml(post.id)}">リプライ</button>
+            </div>
+            ${replies ? `<div class="charaverse-comment-children">${replies}</div>` : ""}
+          </div>
+        </div>
+      `;
+    }).join("");
+  };
+
+  return renderBranch();
+}
+
 function renderCharaversePost(post) {
   const author = getCharacter(post.authorId) || post.authorSnapshot || null;
   const isCommunityPost = post.scope === "community";
@@ -1454,27 +1718,20 @@ function renderCharaversePost(post) {
       return `<span class="charaverse-reaction-chip">${escapeHtml(reactor?.name || "誰か")}「${escapeHtml(reaction.reactionLabel)}」</span>`;
     })
     .join("");
-  const comments = (post.comments || [])
-    .map((comment) => {
-      const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || null;
-      return `
-        <div class="charaverse-comment">
-          ${renderAvatarMarkup(getCharacterSnsIcon(commenter), commenter?.name || "誰か", "sns-comment")}
-          <div class="charaverse-comment-body">
-            <strong>${escapeHtml(commenter?.name || "誰か")}</strong>
-            <div>${escapeHtml(comment.text)}</div>
-          </div>
-        </div>
-      `;
-    })
-    .join("");
+  const comments = renderCharaverseComments(post);
+  const replyContext = state.charaverseReplyContext && state.charaverseReplyContext.postId === post.id
+    ? state.charaverseReplyContext
+    : null;
 
   return `
     <article class="charaverse-post-card ${isCommunityPost ? "community" : ""}">
       <div class="charaverse-post-head">
-        ${renderAvatarMarkup(getCharacterSnsIcon(author), author?.name || "不明", "sns-post")}
+        <button class="avatar-button" type="button" data-profile-open="true" data-profile-role="author" data-post-id="${escapeHtml(post.id)}">
+          ${renderAvatarMarkup(getCharacterSnsIcon(author), author?.name || "不明", "sns-post")}
+        </button>
         <div class="charaverse-post-identity">
           <strong>${escapeHtml(author?.name || "不明")}</strong>
+          ${(author?.snsHandle || post.authorSnapshot?.snsHandle) ? `<div class="charaverse-profile-handle">${escapeHtml(author?.snsHandle || post.authorSnapshot?.snsHandle)}</div>` : ""}
           <div class="charaverse-post-head-meta">
             <span class="badge">${escapeHtml(resolveCharaverseLabel(post.genre))}</span>
             <span class="community-pill">${isCommunityPost ? "PUBLIC" : "LOCAL"}</span>
@@ -1506,6 +1763,12 @@ function renderCharaversePost(post) {
       ${reactions ? `<div class="charaverse-reactions">${reactions}</div>` : ""}
       ${isCommunityPost ? `
         <div class="charaverse-comment-box">
+          ${replyContext ? `
+            <div class="reply-context-pill">
+              <span>@${escapeHtml(replyContext.targetName)} への返信</span>
+              <button class="secondary-btn tiny-btn" type="button" data-charaverse-reply-cancel="true">解除</button>
+            </div>
+          ` : ""}
           <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この公開投稿へのコメント内容"></textarea>
           <div class="charaverse-manual-tools">
             <button class="primary-btn" type="button" data-charaverse-comment="${escapeHtml(post.id)}">公開コメント送信</button>
@@ -1513,6 +1776,12 @@ function renderCharaversePost(post) {
         </div>
       ` : `
         <div class="charaverse-comment-box">
+          ${replyContext ? `
+            <div class="reply-context-pill">
+              <span>@${escapeHtml(replyContext.targetName)} への返信</span>
+              <button class="secondary-btn tiny-btn" type="button" data-charaverse-reply-cancel="true">解除</button>
+            </div>
+          ` : ""}
           <textarea rows="3" data-charaverse-comment-input="${escapeHtml(post.id)}" placeholder="親の入力：この投稿へのコメント内容"></textarea>
           <div class="charaverse-manual-tools">
             <button class="primary-btn" type="button" data-charaverse-comment="${escapeHtml(post.id)}">コメント送信</button>
@@ -1589,6 +1858,8 @@ function buildPostAuthorSnapshot(character) {
     archetype: character.archetype,
     tone: character.tone,
     faction: character.faction,
+    snsHandle: character.snsHandle || "",
+    snsBio: character.snsBio || "",
     imageDataUrl: character.imageDataUrl || "",
     snsImageDataUrl: character.snsImageDataUrl || "",
     chatImageDataUrl: character.chatImageDataUrl || "",
@@ -1745,6 +2016,39 @@ function getAnyCharaversePost(postId) {
   return getCharaversePost(postId) || getCommunityCharaversePost(postId);
 }
 
+function findCommentInPost(post, commentId) {
+  return (post?.comments || []).find((comment) => comment.id === commentId) || null;
+}
+
+function handleProfileOpen(trigger) {
+  const post = getAnyCharaversePost(trigger.dataset.postId || "");
+  if (!post) return;
+
+  if (trigger.dataset.profileRole === "author") {
+    const author = getPostAuthorCharacter(post);
+    openCharaverseProfile(buildProfileDescriptor({
+      key: getPostAuthorProfileKey(post),
+      character: author,
+      post,
+      snapshot: post.authorSnapshot || null,
+      profileName: post.profileName || "",
+      profileId: post.profileId || "",
+    }));
+    return;
+  }
+
+  const comment = findCommentInPost(post, trigger.dataset.commentId || "");
+  if (!comment) return;
+  const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || null;
+  openCharaverseProfile(buildProfileDescriptor({
+    key: getCommenterProfileKey(post, comment),
+    character: commenter,
+    snapshot: comment.commenterSnapshot || null,
+    profileName: comment.profileName || post.profileName || "",
+    profileId: comment.profileId || post.profileId || "",
+  }));
+}
+
 function getPostAuthorCharacter(post) {
   if (!post) return null;
   const author = getCharacter(post.authorId);
@@ -1760,6 +2064,8 @@ function getPostAuthorCharacter(post) {
     archetype: snapshot.archetype || "cool",
     tone: snapshot.tone || "",
     faction: snapshot.faction || "",
+    snsHandle: snapshot.snsHandle || "",
+    snsBio: snapshot.snsBio || "",
     imageDataUrl: snapshot.imageDataUrl || "",
     snsImageDataUrl: snapshot.snsImageDataUrl || "",
     chatImageDataUrl: snapshot.chatImageDataUrl || "",
@@ -2077,6 +2383,9 @@ async function sendRelationshipChat(message, actorId, targetId) {
   thread.push({
     id: createId(),
     sender: "user",
+    speakerRole: "actor",
+    speakerId: actor.id,
+    speakerName: actor.name,
     text: message,
     timestamp: new Date().toISOString(),
   });
@@ -2118,6 +2427,9 @@ async function sendRelationshipChat(message, actorId, targetId) {
   thread.push({
     id: createId(),
     sender: "character",
+    speakerRole: "target",
+    speakerId: target.id,
+    speakerName: target.name,
     text: replyText,
     timestamp: new Date().toISOString(),
   });
@@ -2134,6 +2446,20 @@ async function sendRelationshipChat(message, actorId, targetId) {
   });
   saveMemory(targetId, `会話: ${actor?.name || "誰か"} → ${target.name}`, relation.lastMemory, actorId);
   saveState();
+}
+
+function buildNamedRelationshipThread(actor, target, thread) {
+  return (thread || []).slice(-8).map((message) => {
+    const isActorLine = message.sender === "user";
+    const fallbackSpeaker = isActorLine ? actor : target;
+    return {
+      speakerRole: message.speakerRole || (isActorLine ? "actor" : "target"),
+      speakerId: message.speakerId || fallbackSpeaker?.id || "",
+      speakerName: message.speakerName || fallbackSpeaker?.name || "",
+      text: message.text || "",
+      timestamp: message.timestamp || "",
+    };
+  });
 }
 
 function analyzeChatMessageEffect(message, relation) {
@@ -3211,6 +3537,7 @@ async function generateAiRelationshipReply({ actor, target, relation, playerMess
   const historySnapshot = buildRelationshipHistorySnapshot(actor.id, target.id, {
     includeBattle: false,
   });
+  const namedThread = buildNamedRelationshipThread(actor, target, thread);
   const recentCharacterReplies = thread
     .filter((item) => item.sender === "character")
     .slice(-3)
@@ -3224,6 +3551,8 @@ async function generateAiRelationshipReply({ actor, target, relation, playerMess
     "Do not only mirror the user's emotion. Move the conversation forward.",
     "The tone should feel like a fusion of a novel scene and an in-game conversation.",
     "Use the full character sheet, not just the current mood.",
+    "The actor and target are different people. Never swap them, merge them, or make the target praise themself.",
+    "Only the target character may speak in reply.",
     "",
     "Output keys:",
     "reply, moodNote, memoryHint, moveType, nextHook",
@@ -3237,7 +3566,7 @@ async function generateAiRelationshipReply({ actor, target, relation, playerMess
     `Conversation meta: ${JSON.stringify(chatMeta)}`,
     `Inferred topic: ${inferredTopic}`,
     `Player message: ${playerMessage}`,
-    `Recent thread: ${JSON.stringify(thread.slice(-6))}`,
+    `Recent named thread: ${JSON.stringify(namedThread)}`,
     `Recent character replies to avoid repeating: ${JSON.stringify(recentCharacterReplies)}`,
     `Character-specific anchors you may use: ${JSON.stringify(availableAnchors)}`,
     "",
@@ -3419,6 +3748,8 @@ function compactCharacterSheet(character) {
     gratitudeStyle: character.gratitudeStyle,
     defeatStyle: character.defeatStyle,
     victoryStyle: character.victoryStyle,
+    snsHandle: character.snsHandle,
+    snsBio: character.snsBio,
     notes: character.notes,
     hasImage: Boolean(character.imageDataUrl),
     hasSnsIcon: Boolean(character.snsImageDataUrl),
@@ -3441,6 +3772,9 @@ function buildRelationshipHistorySnapshot(actorId, targetId, options = {}) {
     .slice(-8)
     .map((message) => ({
       sender: message.sender,
+      speakerRole: message.speakerRole || (message.sender === "user" ? "actor" : "target"),
+      speakerId: message.speakerId || "",
+      speakerName: message.speakerName || "",
       text: message.text,
       timestamp: message.timestamp,
     }));
@@ -3840,6 +4174,8 @@ function buildBaseCustomCharacterFields(overrides = {}) {
     gratitudeStyle: "",
     defeatStyle: "",
     victoryStyle: "",
+    snsHandle: "",
+    snsBio: "",
     notes: "ここに設定メモを書けます。",
     snsImageDataUrl: "",
     chatImageDataUrl: "",
@@ -4136,6 +4472,184 @@ function loadImage(src) {
     image.onload = () => resolve(image);
     image.onerror = () => reject(new Error("画像として読み込めませんでした"));
     image.src = src;
+  });
+}
+
+async function handleCharaverseManualComment(postId) {
+  const post = getAnyCharaversePost(postId);
+  if (!post) return;
+  const actorSelect = document.querySelector(`[data-charaverse-actor="${postId}"]`);
+  const input = document.querySelector(`[data-charaverse-comment-input="${postId}"]`);
+  const commenter = getCharacter(actorSelect?.value || "");
+  const author = getPostAuthorCharacter(post);
+  const rawInput = String(input?.value || "").trim();
+  if (!commenter || !author || !rawInput || commenter.id === author.id) return;
+
+  const relation = getRelation(commenter.id, author.id);
+  let text = "";
+  if (canUseApi()) {
+    try {
+      const generated = await generateAiCharaverseComment({ commenter, author, relation, post, rawInput });
+      text = generated.commentText;
+      state.settings.apiStatus = `繧ｭ繝｣繝ｩ繝舌・繧ｹ繧ｳ繝｡繝ｳ繝育函謌・ ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `繧ｭ繝｣繝ｩ繝舌・繧ｹ繧ｳ繝｡繝ｳ繝医・繝ｭ繝ｼ繧ｫ繝ｫ陬懈ｭ｣縺ｸ蛻・崛: ${error.message}`;
+    }
+  }
+  if (!text) {
+    text = generateLocalManualCharaverseComment(commenter, author, rawInput);
+  }
+
+  const delta = inferCharaverseCommentDelta(post, relation, text);
+  const replyContext = state.charaverseReplyContext?.postId === post.id
+    ? state.charaverseReplyContext
+    : null;
+  const commentEntry = {
+    id: createId(),
+    commenterId: commenter.id,
+    commenterSnapshot: buildPostAuthorSnapshot(commenter),
+    profileId: state.communityProfileId,
+    profileName: getCommunityProfileName(),
+    text,
+    timestamp: new Date().toISOString(),
+    parentCommentId: replyContext?.commentId || "",
+    replyToName: replyContext?.targetName || "",
+    delta,
+    memory: `${commenter.name} が ${author.name} の投稿にコメントした`,
+  };
+
+  if (post.scope === "community") {
+    await publishCommunityComment(post, author, commenter, commentEntry);
+  } else {
+    post.comments = post.comments || [];
+    post.comments.push(commentEntry);
+    applyRelationDelta(relation, delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = `${commenter.name} が ${author.name} の投稿にコメントした`;
+    saveMemory(author.id, `繧ｭ繝｣繝｣繝舌・繧ｹ謇句虚繧ｳ繝｡繝ｳ繝・ ${commenter.name}`, relation.lastMemory);
+    saveState();
+  }
+
+  if (input) input.value = "";
+  if (replyContext) {
+    clearReplyContext();
+    return;
+  }
+  renderAll();
+}
+
+function bindCharaverse() {
+  elements.charaverseAuthorSelect.addEventListener("change", () => {
+    state.charaverseComposer.authorId = elements.charaverseAuthorSelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.charaverseGenreSelect.addEventListener("change", () => {
+    state.charaverseComposer.genre = elements.charaverseGenreSelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.charaverseMoodSelect.addEventListener("change", () => {
+    state.charaverseComposer.mood = elements.charaverseMoodSelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.charaverseRawInput.addEventListener("input", () => {
+    renderCharaversePreview();
+  });
+
+  elements.charaverseSharePublic.addEventListener("change", () => {
+    state.charaverseComposer.sharePublic = elements.charaverseSharePublic.checked;
+    saveState();
+  });
+
+  elements.charaverseReroll.addEventListener("click", async () => {
+    await renderCharaversePreview(true);
+  });
+
+  elements.charaverseRefreshCommunity.addEventListener("click", async () => {
+    await syncCommunitySnapshot(true);
+  });
+
+  elements.charaverseRefreshCommunityInline.addEventListener("click", async () => {
+    await syncCommunitySnapshot(true);
+  });
+
+  elements.charaverseForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await createCharaversePost();
+  });
+
+  const bindReplyActions = async (event) => {
+    const profileTrigger = event.target.closest("[data-profile-open]");
+    if (profileTrigger) {
+      handleProfileOpen(profileTrigger);
+      return true;
+    }
+
+    const replyTrigger = event.target.closest("[data-charaverse-reply]");
+    if (replyTrigger) {
+      const post = getAnyCharaversePost(replyTrigger.dataset.charaverseReplyPost);
+      const comment = findCommentInPost(post, replyTrigger.dataset.charaverseReply);
+      if (post && comment) {
+        const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || { name: "隱ｰ縺・" };
+        setReplyContext(post.id, comment.id, commenter.name || "隱ｰ縺・");
+      }
+      return true;
+    }
+
+    const replyCancelButton = event.target.closest("[data-charaverse-reply-cancel]");
+    if (replyCancelButton) {
+      clearReplyContext();
+      return true;
+    }
+
+    return false;
+  };
+
+  elements.charaverseTimeline.addEventListener("click", async (event) => {
+    if (await bindReplyActions(event)) return;
+
+    const likeButton = event.target.closest("[data-charaverse-like]");
+    if (likeButton) {
+      await handleCharaverseLike(likeButton.dataset.charaverseLike);
+      return;
+    }
+
+    const commentButton = event.target.closest("[data-charaverse-comment]");
+    if (commentButton) {
+      await handleCharaverseManualComment(commentButton.dataset.charaverseComment);
+      return;
+    }
+
+    const deleteButton = event.target.closest("[data-charaverse-delete]");
+    if (deleteButton) {
+      deleteCharaversePost(deleteButton.dataset.charaverseDelete);
+    }
+  });
+
+  elements.charaverseProfilePanel.addEventListener("click", async (event) => {
+    const closeButton = event.target.closest("[data-charaverse-profile-close]");
+    if (closeButton) {
+      closeCharaverseProfile();
+      return;
+    }
+
+    const followButton = event.target.closest("[data-charaverse-follow]");
+    if (followButton) {
+      toggleProfileFollow(followButton.dataset.charaverseFollow);
+      return;
+    }
+
+    if (await bindReplyActions(event)) return;
+
+    const commentButton = event.target.closest("[data-charaverse-comment]");
+    if (commentButton) {
+      await handleCharaverseManualComment(commentButton.dataset.charaverseComment);
+    }
   });
 }
 
