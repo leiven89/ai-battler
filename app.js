@@ -368,6 +368,9 @@ const defaultState = {
   selectedEnemyId: "eira",
   chatActorId: "player",
   chatSelectedId: "eira",
+  chatMode: "direct",
+  chatGroupId: "",
+  chatGroups: [],
   characters: sampleCharacters,
   relations: {
     "player:eira": {
@@ -499,6 +502,9 @@ const elements = {
   intervalActions: document.getElementById("interval-actions"),
   chatActorSelect: document.getElementById("chat-actor-select"),
   chatTargetSelect: document.getElementById("chat-target-select"),
+  chatGroupName: document.getElementById("chat-group-name"),
+  chatGroupMemberList: document.getElementById("chat-group-member-list"),
+  chatCreateGroup: document.getElementById("chat-create-group"),
   chatContactList: document.getElementById("chat-contact-list"),
   chatThreadHeader: document.getElementById("chat-thread-header"),
   chatThread: document.getElementById("chat-thread"),
@@ -4651,6 +4657,611 @@ function bindCharaverse() {
       await handleCharaverseManualComment(commentButton.dataset.charaverseComment);
     }
   });
+}
+
+function getChatPseudoGroupId(groupId) {
+  return `group:${groupId}`;
+}
+
+function getChatGroupById(groupId) {
+  return (state.chatGroups || []).find((group) => group.id === groupId) || null;
+}
+
+function normalizeChatGroups() {
+  state.chatGroups = (state.chatGroups || [])
+    .map((group) => ({
+      ...group,
+      memberIds: [...new Set((group.memberIds || []).filter((id) => getCharacter(id)))],
+    }))
+    .filter((group) => group.memberIds.length >= 3);
+}
+
+function getGroupChatThread(actorId, groupId) {
+  return getChatThread(actorId, getChatPseudoGroupId(groupId));
+}
+
+function getGroupChatMeta(actorId, groupId) {
+  return getChatMeta(actorId, getChatPseudoGroupId(groupId));
+}
+
+function getGroupMembers(group) {
+  return (group?.memberIds || []).map((id) => getCharacter(id)).filter(Boolean);
+}
+
+function ensureChatPairState() {
+  normalizeChatGroups();
+  const actorFallback = getCharacter(state.chatActorId) || getCharacter("player") || state.characters[0] || null;
+  if (!actorFallback) return;
+  state.chatActorId = actorFallback.id;
+
+  if (state.chatMode === "group") {
+    const activeGroup = getChatGroupById(state.chatGroupId);
+    if (!activeGroup) {
+      state.chatMode = "direct";
+      state.chatGroupId = "";
+    } else if (!activeGroup.memberIds.includes(state.chatActorId)) {
+      state.chatActorId = activeGroup.memberIds.find((id) => getCharacter(id)) || state.chatActorId;
+    }
+  }
+
+  const targets = state.characters.filter((character) => character.id !== state.chatActorId);
+  const fallbackTarget = targets[0] || null;
+  if (!getCharacter(state.chatSelectedId) || state.chatSelectedId === state.chatActorId) {
+    state.chatSelectedId = fallbackTarget?.id || "";
+  }
+
+  if (state.chatMode !== "group") {
+    state.chatMode = "direct";
+  }
+}
+
+function fillChatParticipants() {
+  ensureChatPairState();
+  elements.chatActorSelect.innerHTML = state.characters
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+    .join("");
+  elements.chatActorSelect.value = state.chatActorId;
+
+  const targets = state.characters.filter((character) => character.id !== state.chatActorId);
+  elements.chatTargetSelect.innerHTML = targets
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+    .join("");
+  elements.chatTargetSelect.value = state.chatSelectedId;
+
+  const suggested = new Set([state.chatSelectedId].filter(Boolean));
+  elements.chatGroupMemberList.innerHTML = targets
+    .map((character) => `
+      <label class="chat-group-member">
+        <input type="checkbox" data-chat-group-member="${escapeHtml(character.id)}" ${suggested.has(character.id) ? "checked" : ""}>
+        ${renderAvatarMarkup(getCharacterChatIcon(character), character.name, "thread")}
+        <span>${escapeHtml(character.name)}</span>
+      </label>
+    `)
+    .join("");
+}
+
+function buildGroupRelationSummary(actorId, members) {
+  if (!members.length) {
+    return { friendship: 0, rivalry: 0, respect: 0, caution: 0 };
+  }
+  const totals = members.reduce((acc, member) => {
+    const relation = getRelation(actorId, member.id);
+    acc.friendship += relation.friendship;
+    acc.rivalry += relation.rivalry;
+    acc.respect += relation.respect;
+    acc.caution += relation.caution;
+    return acc;
+  }, { friendship: 0, rivalry: 0, respect: 0, caution: 0 });
+  return {
+    friendship: Math.round(totals.friendship / members.length),
+    rivalry: Math.round(totals.rivalry / members.length),
+    respect: Math.round(totals.respect / members.length),
+    caution: Math.round(totals.caution / members.length),
+  };
+}
+
+function renderRelationshipChat() {
+  const actor = getChatActorCharacter();
+  if (!actor) {
+    elements.chatThreadHeader.innerHTML = "<h3>会話キャラがいません</h3>";
+    elements.chatThread.innerHTML = "";
+    elements.chatContactList.innerHTML = "";
+    elements.chatSend.disabled = true;
+    return;
+  }
+
+  const directContacts = state.characters.filter((character) => character.id !== state.chatActorId);
+  const groupContacts = (state.chatGroups || []).filter((group) => group.memberIds.includes(actor.id));
+  const directMarkup = directContacts.map((character) => {
+    const relation = getRelation(state.chatActorId, character.id);
+    const thread = getChatThread(state.chatActorId, character.id);
+    const lastMessage = thread.at(-1);
+    const activeClass = state.chatMode === "direct" && state.chatSelectedId === character.id ? "active" : "";
+    return `
+      <button class="chat-contact ${activeClass}" data-chat-target="${escapeHtml(character.id)}" data-chat-mode="direct">
+        <div class="chat-contact-avatar">
+          ${renderAvatarMarkup(getCharacterChatIcon(character), character.name, "contact")}
+        </div>
+        <div class="chat-contact-top">
+          <strong>${escapeHtml(character.name)}</strong>
+          <span class="badge">${escapeHtml(relation.title)}</span>
+        </div>
+        <div class="chat-contact-preview">${escapeHtml(lastMessage?.text || "まだ会話していません。")}</div>
+      </button>
+    `;
+  }).join("");
+
+  const groupMarkup = groupContacts.map((group) => {
+    const thread = getGroupChatThread(actor.id, group.id);
+    const lastMessage = thread.at(-1);
+    const activeClass = state.chatMode === "group" && state.chatGroupId === group.id ? "active" : "";
+    const others = getGroupMembers(group).filter((member) => member.id !== actor.id);
+    return `
+      <button class="chat-contact ${activeClass}" data-chat-group="${escapeHtml(group.id)}" data-chat-mode="group">
+        <div class="chat-contact-avatar">
+          ${renderAvatarMarkup("", group.name || "GROUP", "contact")}
+        </div>
+        <div class="chat-contact-top">
+          <strong>${escapeHtml(group.name || "Group Chat")}</strong>
+          <span class="badge">GROUP</span>
+        </div>
+        <div class="chat-contact-preview">${escapeHtml(lastMessage?.speakerName ? `${lastMessage.speakerName}: ${lastMessage.text}` : (others.map((member) => member.name).join(" / ") || "グループ会話"))}</div>
+      </button>
+    `;
+  }).join("");
+
+  elements.chatContactList.innerHTML = `
+    <div class="chat-contact-section">
+      <div class="chat-contact-section-title">Direct</div>
+      ${directMarkup || `<div class="memory-meta">相手がいません。</div>`}
+    </div>
+    <div class="chat-contact-section">
+      <div class="chat-contact-section-title">Groups</div>
+      ${groupMarkup || `<div class="memory-meta">まだグループはありません。</div>`}
+    </div>
+  `;
+
+  if (state.chatMode === "group" && state.chatGroupId) {
+    const group = getChatGroupById(state.chatGroupId);
+    if (!group) {
+      state.chatMode = "direct";
+      renderRelationshipChat();
+      return;
+    }
+    const members = getGroupMembers(group);
+    const others = members.filter((member) => member.id !== actor.id);
+    const summary = buildGroupRelationSummary(actor.id, others);
+    const thread = getGroupChatThread(actor.id, group.id);
+    const chips = others.map((member) => `<span class="chat-group-chip">${escapeHtml(member.name)}</span>`).join("");
+    elements.chatThreadHeader.innerHTML = `
+      <p class="eyebrow">Relationship Group Chat</p>
+      <div class="chat-thread-identity">
+        ${renderAvatarMarkup("", group.name || "GROUP", "thread-header")}
+        <div>
+          <h2>${escapeHtml(group.name || "Group Chat")}</h2>
+          <p>友情 ${summary.friendship} / 因縁 ${summary.rivalry} / 尊敬 ${summary.respect} / 警戒 ${summary.caution}</p>
+          <div class="charaverse-post-meta">${chips}</div>
+        </div>
+      </div>
+    `;
+    elements.chatThread.innerHTML = renderChatThread(thread, actor, others[0] || actor);
+    elements.chatSend.disabled = false;
+    return;
+  }
+
+  const target = getChatTargetCharacter();
+  if (!target) {
+    elements.chatThreadHeader.innerHTML = "<h3>会話相手がいません</h3>";
+    elements.chatThread.innerHTML = "";
+    elements.chatSend.disabled = true;
+    return;
+  }
+
+  const relation = getRelation(actor.id, target.id);
+  const thread = getChatThread(actor.id, target.id);
+  elements.chatThreadHeader.innerHTML = `
+    <p class="eyebrow">LINE-like Relationship Chat</p>
+    <div class="chat-thread-identity">
+      ${renderAvatarMarkup(getCharacterChatIcon(target), target.name, "thread-header")}
+      <div>
+        <h2>${escapeHtml(actor.name)} → ${escapeHtml(target.name)}</h2>
+        <p>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect} / 警戒 ${relation.caution}</p>
+      </div>
+    </div>
+  `;
+  elements.chatThread.innerHTML = renderChatThread(thread, actor, target);
+  elements.chatSend.disabled = false;
+}
+
+function createChatGroupFromBuilder() {
+  const actor = getChatActorCharacter();
+  if (!actor) return;
+  const selectedMembers = [...document.querySelectorAll("[data-chat-group-member]:checked")]
+    .map((input) => input.dataset.chatGroupMember)
+    .filter((id) => id && id !== actor.id && getCharacter(id));
+  const memberIds = [actor.id, ...new Set(selectedMembers)];
+  if (memberIds.length < 3) {
+    appendSystemNotice("グループチャットは3人以上で作成してください。");
+    return;
+  }
+  const name = String(elements.chatGroupName.value || "").trim()
+    || `${actor.name} + ${selectedMembers.slice(0, 2).map((id) => getCharacter(id)?.name || id).join(" / ")}`;
+  const group = {
+    id: `chat-group-${createId()}`,
+    name,
+    memberIds,
+    createdAt: new Date().toISOString(),
+  };
+  state.chatGroups = [group, ...(state.chatGroups || [])];
+  state.chatMode = "group";
+  state.chatGroupId = group.id;
+  elements.chatGroupName.value = "";
+  saveState();
+  renderAll();
+}
+
+function bindRelationshipChat() {
+  elements.chatActorSelect.addEventListener("change", () => {
+    state.chatActorId = elements.chatActorSelect.value;
+    ensureChatPairState();
+    saveState();
+    renderAll();
+  });
+
+  elements.chatTargetSelect.addEventListener("change", () => {
+    state.chatMode = "direct";
+    state.chatSelectedId = elements.chatTargetSelect.value;
+    ensureChatPairState();
+    saveState();
+    renderAll();
+  });
+
+  elements.chatCreateGroup.addEventListener("click", () => {
+    createChatGroupFromBuilder();
+  });
+
+  elements.chatContactList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-chat-target], [data-chat-group]");
+    if (!button) return;
+    if (button.dataset.chatMode === "group") {
+      state.chatMode = "group";
+      state.chatGroupId = button.dataset.chatGroup;
+    } else {
+      state.chatMode = "direct";
+      state.chatSelectedId = button.dataset.chatTarget;
+    }
+    ensureChatPairState();
+    saveState();
+    renderAll();
+  });
+
+  elements.chatForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(elements.chatForm);
+    const message = (form.get("message") || "").toString().trim();
+    if (!message) return;
+
+    if (state.chatMode === "group" && state.chatGroupId) {
+      await sendGroupRelationshipChat(message, getChatActorCharacter()?.id || "player", state.chatGroupId);
+    } else {
+      const currentTarget = getChatTargetCharacter();
+      if (!currentTarget) return;
+      await sendDirectRelationshipChat(message, getChatActorCharacter()?.id || "player", currentTarget.id);
+    }
+    elements.chatForm.reset();
+    renderAll();
+  });
+}
+
+async function sendRelationshipChat(message, actorId, targetId) {
+  return sendDirectRelationshipChat(message, actorId, targetId);
+}
+
+async function sendDirectRelationshipChat(message, actorId, targetId) {
+  const actor = getCharacter(actorId);
+  const target = getCharacter(targetId);
+  const relation = getRelation(actorId, targetId);
+  const thread = getChatThread(actorId, targetId);
+  const chatMeta = getChatMeta(actorId, targetId);
+  const battleBundle = actorId === "player" ? getBattleRecordBundle(targetId) : getEmptyBattleRecordBundle();
+  const delta = analyzeChatMessageEffect(message, relation);
+  const inferredTopic = inferConversationTopic(message, target);
+
+  thread.push({
+    id: createId(),
+    sender: "user",
+    speakerRole: "actor",
+    speakerId: actor.id,
+    speakerName: actor.name,
+    text: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  applyRelationDelta(relation, delta);
+  relation.title = resolveRelationshipTitle(relation);
+
+  let replyPayload = null;
+  if (canUseApi()) {
+    try {
+      replyPayload = await generateAiRelationshipReply({
+        actor,
+        target,
+        relation,
+        playerMessage: message,
+        thread,
+        chatMeta,
+        battleBundle,
+        inferredTopic,
+      });
+      state.settings.apiStatus = `会話AI生成: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `会話AIはローカル補正へ切替: ${error.message}`;
+    }
+  }
+
+  const rawReplyText = replyPayload?.reply || generateBattleAwareRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
+  const diversifiedReply = diversifyRelationshipReply({
+    actorId,
+    targetId,
+    target,
+    relation,
+    replyText: rawReplyText,
+    inferredTopic,
+    chatMeta,
+    battleBundle,
+  });
+  const replyText = diversifiedReply.text;
+  thread.push({
+    id: createId(),
+    sender: "character",
+    speakerRole: "target",
+    speakerId: target.id,
+    speakerName: target.name,
+    text: replyText,
+    timestamp: new Date().toISOString(),
+  });
+
+  relation.lastMemory = replyPayload?.memoryHint || buildChatMemoryHint(target, delta);
+  relation.title = resolveRelationshipTitle(relation);
+  updateChatMeta(actorId, targetId, {
+    userMessage: message,
+    replyText,
+    inferredTopic,
+    moveType: replyPayload?.moveType || "local",
+    nextHook: replyPayload?.nextHook || "",
+    anchorKey: diversifiedReply.anchorKey || "",
+  });
+  saveMemory(targetId, `会話: ${actor?.name || "actor"} → ${target.name}`, relation.lastMemory, actorId);
+  saveState();
+}
+
+async function sendGroupRelationshipChat(message, actorId, groupId) {
+  const actor = getCharacter(actorId);
+  const group = getChatGroupById(groupId);
+  if (!actor || !group) return;
+  const members = getGroupMembers(group).filter((member) => member.id !== actor.id);
+  if (!members.length) return;
+
+  const thread = getGroupChatThread(actorId, groupId);
+  const chatMeta = getGroupChatMeta(actorId, groupId);
+  const inferredTopic = inferConversationTopic(message, members[0] || actor);
+
+  thread.push({
+    id: createId(),
+    sender: "user",
+    speakerRole: "actor",
+    speakerId: actor.id,
+    speakerName: actor.name,
+    text: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  let responsePayload = null;
+  if (canUseApi()) {
+    try {
+      responsePayload = await generateAiGroupRelationshipReply({
+        actor,
+        group,
+        members,
+        thread,
+        chatMeta,
+        playerMessage: message,
+        inferredTopic,
+      });
+      state.settings.apiStatus = `グループ会話AI生成: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `グループ会話はローカル補正へ切替: ${error.message}`;
+    }
+  }
+
+  const replies = responsePayload?.responses?.length
+    ? responsePayload.responses
+    : generateLocalGroupReplies({ actor, members, message, chatMeta, inferredTopic, groupId });
+
+  replies.slice(0, Math.min(3, members.length)).forEach((item) => {
+    const speaker = members.find((member) => member.id === item.speakerId) || members[0];
+    if (!speaker) return;
+    const relation = getRelation(actor.id, speaker.id);
+    const delta = analyzeChatMessageEffect(message, relation);
+    applyRelationDelta(relation, delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = item.memoryHint || `${speaker.name} がグループ会話で反応した`;
+    thread.push({
+      id: createId(),
+      sender: "character",
+      speakerRole: "member",
+      speakerId: speaker.id,
+      speakerName: speaker.name,
+      text: item.reply,
+      timestamp: new Date().toISOString(),
+    });
+    saveMemory(speaker.id, `グループ会話: ${group.name}`, relation.lastMemory, actor.id);
+  });
+
+  updateChatMeta(actorId, getChatPseudoGroupId(groupId), {
+    userMessage: message,
+    replyText: replies.map((item) => `${item.speakerId}:${item.reply}`).join(" / "),
+    inferredTopic,
+    moveType: responsePayload?.moveType || "group",
+    nextHook: responsePayload?.nextHook || "",
+    anchorKey: "",
+  });
+  saveState();
+}
+
+function generateLocalGroupReplies({ actor, members, message, chatMeta, inferredTopic }) {
+  return members
+    .map((member) => {
+      const relation = getRelation(actor.id, member.id);
+      const delta = analyzeChatMessageEffect(message, relation);
+      return {
+        speakerId: member.id,
+        score: relation.friendship + relation.respect + relation.rivalry * 0.6 + randomBetween(0, 8),
+        reply: generateBattleAwareRelationshipReply(actor, member, relation, message, delta, chatMeta, actor.id === "player" ? getBattleRecordBundle(member.id) : getEmptyBattleRecordBundle(), inferredTopic),
+        memoryHint: `${member.name} がグループ会話で印象を残した`,
+      };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, Math.min(members.length >= 3 ? 2 : 1, members.length));
+}
+
+async function generateAiGroupRelationshipReply({ actor, group, members, thread, chatMeta, playerMessage, inferredTopic }) {
+  const memberSheets = members.map((member) => ({
+    id: member.id,
+    name: member.name,
+    relation: getRelation(actor.id, member.id),
+    sheet: JSON.parse(compactCharacterSheet(member)),
+  }));
+  const namedThread = buildNamedRelationshipThread(actor, members[0] || actor, thread);
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are writing a Japanese group messenger conversation for an original character relationship game.",
+    "The actor sends one message into a group chat, and 1 to 3 different group members may reply.",
+    "Each reply must keep that speaker's personality, speech style, memories, and relationship with the actor.",
+    "Different speakers must sound clearly different from each other.",
+    "Push the conversation forward with concrete questions, proposals, reactions, or remembered details.",
+    "",
+    `Actor: ${compactCharacterSheet(actor)}`,
+    `Group: ${JSON.stringify({ id: group.id, name: group.name, memberIds: group.memberIds })}`,
+    `Members: ${JSON.stringify(memberSheets)}`,
+    `Conversation meta: ${JSON.stringify(chatMeta)}`,
+    `Inferred topic: ${inferredTopic}`,
+    `Actor message: ${playerMessage}`,
+    `Recent named thread: ${JSON.stringify(namedThread)}`,
+    "",
+    "Requirements:",
+    "- responses must be an array of 1 to 3 items.",
+    "- speakerId must be one of the listed member ids, never the actor id.",
+    "- use distinct speakers when possible.",
+    "- each reply should be 1 to 3 Japanese sentences.",
+    "- the replies should feel like a fusion of a novel scene and a messenger app.",
+    "- avoid generic agreement-only lines.",
+    "- memoryHint should be short and suitable for a memory log.",
+    "- moveType should be one of ask, reveal, invite, challenge, reflect.",
+    "- nextHook should briefly describe where the group conversation can go next.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.9, state.settings.temperature),
+    maxTokens: 620,
+    responseSchema: {
+      type: "object",
+      required: ["responses", "moveType", "nextHook"],
+      properties: {
+        responses: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["speakerId", "reply", "memoryHint"],
+            properties: {
+              speakerId: { type: "string" },
+              reply: { type: "string" },
+              moodNote: { type: "string" },
+              memoryHint: { type: "string" },
+            },
+          },
+        },
+        moveType: { type: "string" },
+        nextHook: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
+async function generateAiRelationshipReply({ actor, target, relation, playerMessage, thread, chatMeta, battleBundle, inferredTopic }) {
+  const historySnapshot = buildRelationshipHistorySnapshot(actor.id, target.id, {
+    includeBattle: false,
+  });
+  const namedThread = buildNamedRelationshipThread(actor, target, thread);
+  const availableAnchors = collectCharacterAnchors(target).slice(0, 12);
+  const actorAnchors = collectCharacterAnchors(actor).slice(0, 6);
+  const recentCharacterReplies = thread
+    .filter((item) => item.sender === "character")
+    .slice(-4)
+    .map((item) => item.text);
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are writing a Japanese messenger-app reply for an original character relationship game.",
+    "This is not a generic chatbot. It is a living character replying in their own voice.",
+    "Use the target character's full sheet, battle records, memories, habits, likes, dislikes, faction, origin, and techniques.",
+    "The tone should feel like a fusion of a novel scene and an in-game conversation, but still read naturally in chat.",
+    "The actor and target are different people. Never swap them. Only write the target's reply.",
+    "",
+    `Actor character: ${compactCharacterSheet(actor)}`,
+    `Target character: ${compactCharacterSheet(target)}`,
+    `Relationship: ${JSON.stringify(relation)}`,
+    `Battle record summary: ${JSON.stringify(battleBundle)}`,
+    `Relationship history snapshot: ${historySnapshot}`,
+    `Conversation meta: ${JSON.stringify(chatMeta)}`,
+    `Inferred topic: ${inferredTopic}`,
+    `Actor message: ${playerMessage}`,
+    `Recent named thread: ${JSON.stringify(namedThread)}`,
+    `Recent target replies to avoid repeating: ${JSON.stringify(recentCharacterReplies)}`,
+    `Target anchors: ${JSON.stringify(availableAnchors)}`,
+    `Actor anchors: ${JSON.stringify(actorAnchors)}`,
+    "",
+    "Requirements:",
+    "- reply should be 2 to 4 Japanese sentences.",
+    "- include one concrete detail tied to the target character whenever possible.",
+    "- do one forward move: ask, reveal, invite, challenge, or reflect.",
+    "- do not end with only vague agreement or a generic emotional echo.",
+    "- when battle history matters, correctly understand who won, who lost, and whether it was close or decisive.",
+    "- avoid repeating the same phrase openings as the last few replies.",
+    "- moodNote should summarize the emotional reaction in one sentence.",
+    "- memoryHint should be short and suitable for a memory log.",
+    "- moveType should be one of ask, reveal, invite, challenge, reflect.",
+    "- nextHook should be a short phrase describing the next conversational opening.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.88, state.settings.temperature),
+    maxTokens: 520,
+    responseSchema: {
+      type: "object",
+      required: ["reply", "moodNote", "memoryHint", "moveType", "nextHook"],
+      properties: {
+        reply: { type: "string" },
+        moodNote: { type: "string" },
+        memoryHint: { type: "string" },
+        moveType: { type: "string" },
+        nextHook: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
 }
 
 function loadState() {
