@@ -1189,6 +1189,23 @@ function generateLocalRelationshipReply(target, relation, message, delta) {
   const hostile = relation.rivalry >= 24 || relation.caution >= 24;
   const respectful = relation.respect >= 18;
   const voice = archetypeVoices[target.archetype] || archetypeVoices.cool;
+  const lastMemory = relation.lastMemory || "";
+  const recentMemories = getRelevantMemories(target.id, 2);
+  const recentThread = getChatThread(target.id).slice(-4).map((item) => item.text).join(" ");
+
+  if (/この前|前に|さっき|前回/.test(message)) {
+    if (lastMemory) {
+      return `覚えている。${lastMemory}……あの時のことを、まだ簡単には切り分けられない。`;
+    }
+  }
+
+  if (recentMemories.some((memory) => /挑発|因縁|屈辱/.test(memory.body)) && delta.friendship > 0) {
+    return "今さら優しくされても、すぐに全部が変わるわけじゃない。でも……前よりは、ちゃんと聞く気がある。";
+  }
+
+  if (recentThread && /ありがとう|助かった/.test(recentThread) && delta.friendship > 0) {
+    return "また礼を言うのね。そういう積み重ねは、嫌いじゃない。少しずつだけど、伝わってる。";
+  }
 
   if (delta.friendship >= 2 && warm) {
     if (target.archetype === "gentle") return "えへへ、そう言ってもらえると嬉しいな。あなたと話す時間、けっこう好きかも。";
@@ -1738,11 +1755,16 @@ function computeChatDelta(chatCategory, lastChatCategory) {
 
 async function generateAiTurnText(context) {
   const relation = context.relation;
+  const historySnapshot = buildRelationshipHistorySnapshot(context.enemy.id, {
+    includeBattle: true,
+    battle: context.battle,
+  });
   const prompt = [
     "Generate a JSON object only.",
     "You are the battle narrator for an original character relationship battle game.",
     "Write anime-style prose in Japanese.",
     "Do not change the numeric outcomes. Use the provided outcomes exactly.",
+    "Strongly prioritize consistency with previous battles, chats, and memories.",
     "",
     "Output keys:",
     'battleLog, battleSummary, chatLine, enemyReaction, counterLog, counterSummary, relationNote, memoryHint',
@@ -1764,6 +1786,8 @@ async function generateAiTurnText(context) {
     `Player sheet: ${compactCharacterSheet(context.player)}`,
     `Enemy sheet: ${compactCharacterSheet(context.enemy)}`,
     `Relation now: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
+    `Last remembered event: ${relation.lastMemory}`,
+    `Relationship history snapshot: ${historySnapshot}`,
     "",
     `Player action outcome: damage_to_enemy ${context.playerOutcome.damage}, player_stamina_cost ${context.playerOutcome.staminaCost}, enemy_mental_change ${context.playerOutcome.mentalShift}, relation_delta ${JSON.stringify(context.playerOutcome.relationDelta)}`,
     context.chatDelta
@@ -1827,16 +1851,22 @@ async function generateAiTurnText(context) {
 }
 
 async function generateAiRelationshipReply({ target, relation, playerMessage, thread }) {
+  const historySnapshot = buildRelationshipHistorySnapshot(target.id, {
+    includeBattle: false,
+  });
   const prompt = [
     "Generate a JSON object only.",
     "You are writing a Japanese messenger-app reply for an original character relationship game.",
     "Reflect the target character's personality, tone, memories, and current relationship values.",
+    "Strongly prioritize consistency with previous chats, battle memories, and the most recent relationship history.",
     "",
     "Output keys:",
     "reply, moodNote, memoryHint",
     "",
     `Target character: ${compactCharacterSheet(target)}`,
     `Relationship: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
+    `Last remembered event: ${relation.lastMemory}`,
+    `Relationship history snapshot: ${historySnapshot}`,
     `Player message: ${playerMessage}`,
     `Recent thread: ${JSON.stringify(thread.slice(-6))}`,
     "",
@@ -1923,6 +1953,54 @@ function compactCharacterSheet(character) {
     notes: character.notes,
     stats: character.stats,
   });
+}
+
+function buildRelationshipHistorySnapshot(targetId, options = {}) {
+  const relation = getRelation("player", targetId);
+  const memories = getRelevantMemories(targetId, 6)
+    .map((memory) => ({
+      title: memory.title,
+      body: memory.body,
+      timestamp: memory.timestamp,
+    }));
+  const chatDigest = getChatThread(targetId)
+    .slice(-8)
+    .map((message) => ({
+      sender: message.sender,
+      text: message.text,
+      timestamp: message.timestamp,
+    }));
+
+  const payload = {
+    relationTitle: relation.title,
+    relationValues: {
+      friendship: relation.friendship,
+      rivalry: relation.rivalry,
+      respect: relation.respect,
+      caution: relation.caution,
+    },
+    lastMemory: relation.lastMemory,
+    recentMemories: memories,
+    recentChat: chatDigest,
+  };
+
+  if (options.includeBattle && options.battle) {
+    payload.currentBattleLog = options.battle.logs
+      .slice(-8)
+      .map((entry) => ({
+        label: entry.label,
+        text: entry.text,
+      }));
+  }
+
+  return JSON.stringify(payload);
+}
+
+function getRelevantMemories(targetId, limit = 6) {
+  return [...state.memories]
+    .filter((memory) => memory.opponentId === targetId)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, limit);
 }
 
 function generateFallbackChatLine(character, chatCategory, relation) {
