@@ -151,6 +151,8 @@ function makeCharacter(overrides = {}) {
     victoryStyle: "",
     notes: "",
     imageDataUrl: "",
+    snsImageDataUrl: "",
+    chatImageDataUrl: "",
     techniques: [],
     stats: { atk: 60, spd: 60, mind: 60, charm: 60 },
     ...overrides,
@@ -470,6 +472,12 @@ const elements = {
   characterImagePreview: document.getElementById("character-image-preview"),
   characterImageInput: document.getElementById("character-image-input"),
   removeCharacterImage: document.getElementById("remove-character-image"),
+  characterSnsImagePreview: document.getElementById("character-sns-image-preview"),
+  characterSnsImageInput: document.getElementById("character-sns-image-input"),
+  removeCharacterSnsImage: document.getElementById("remove-character-sns-image"),
+  characterChatImagePreview: document.getElementById("character-chat-image-preview"),
+  characterChatImageInput: document.getElementById("character-chat-image-input"),
+  removeCharacterChatImage: document.getElementById("remove-character-chat-image"),
   enemyRoster: document.getElementById("enemy-roster"),
   battleEnemySelect: document.getElementById("battle-enemy-select"),
   battleMatchupBanner: document.getElementById("battle-matchup-banner"),
@@ -682,9 +690,57 @@ function bindCharacterEditor() {
     }
   });
 
+  elements.characterSnsImageInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const dataUrl = await resizeImageFile(file, 320, 0.9);
+      const current = getEditorCharacter();
+      updateCharacter(current.id, { ...current, snsImageDataUrl: dataUrl });
+      saveState();
+      renderAll();
+    } catch (error) {
+      appendSystemNotice(`SNSアイコンの読み込みに失敗しました: ${error.message}`);
+    } finally {
+      elements.characterSnsImageInput.value = "";
+    }
+  });
+
+  elements.characterChatImageInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const dataUrl = await resizeImageFile(file, 320, 0.9);
+      const current = getEditorCharacter();
+      updateCharacter(current.id, { ...current, chatImageDataUrl: dataUrl });
+      saveState();
+      renderAll();
+    } catch (error) {
+      appendSystemNotice(`チャットアイコンの読み込みに失敗しました: ${error.message}`);
+    } finally {
+      elements.characterChatImageInput.value = "";
+    }
+  });
+
   elements.removeCharacterImage.addEventListener("click", () => {
     const current = getEditorCharacter();
     updateCharacter(current.id, { ...current, imageDataUrl: "" });
+    saveState();
+    renderAll();
+  });
+
+  elements.removeCharacterSnsImage.addEventListener("click", () => {
+    const current = getEditorCharacter();
+    updateCharacter(current.id, { ...current, snsImageDataUrl: "" });
+    saveState();
+    renderAll();
+  });
+
+  elements.removeCharacterChatImage.addEventListener("click", () => {
+    const current = getEditorCharacter();
+    updateCharacter(current.id, { ...current, chatImageDataUrl: "" });
     saveState();
     renderAll();
   });
@@ -990,6 +1046,9 @@ function formCharacterFromEditor() {
     defeatStyle: (form.get("defeatStyle") || "").toString(),
     victoryStyle: (form.get("victoryStyle") || "").toString(),
     notes: (form.get("notes") || "").toString(),
+    imageDataUrl: base.imageDataUrl || "",
+    snsImageDataUrl: base.snsImageDataUrl || "",
+    chatImageDataUrl: base.chatImageDataUrl || "",
     stats: {
       atk: Number(form.get("atk")) || 60,
       spd: Number(form.get("spd")) || 60,
@@ -999,10 +1058,32 @@ function formCharacterFromEditor() {
   };
 }
 
+function getCharacterSnsIcon(character) {
+  return character?.snsImageDataUrl || character?.imageDataUrl || "";
+}
+
+function getCharacterChatIcon(character) {
+  return character?.chatImageDataUrl || character?.snsImageDataUrl || character?.imageDataUrl || "";
+}
+
+function renderAvatarMarkup(src, label, variant = "default") {
+  const safeLabel = escapeHtml(label || "icon");
+  const content = src
+    ? `<img src="${src}" alt="${safeLabel}">`
+    : `<span>${safeLabel.slice(0, 2)}</span>`;
+  return `<div class="avatar-shell ${variant}">${content}</div>`;
+}
+
 function renderCharacterImage(character) {
   elements.characterImagePreview.innerHTML = character.imageDataUrl
     ? `<img src="${character.imageDataUrl}" alt="${escapeHtml(character.name)}">`
     : "<span>NO IMAGE</span>";
+  elements.characterSnsImagePreview.innerHTML = getCharacterSnsIcon(character)
+    ? `<img src="${getCharacterSnsIcon(character)}" alt="${escapeHtml(character.name)} SNS icon">`
+    : "<span>SNS</span>";
+  elements.characterChatImagePreview.innerHTML = getCharacterChatIcon(character)
+    ? `<img src="${getCharacterChatIcon(character)}" alt="${escapeHtml(character.name)} chat icon">`
+    : "<span>CHAT</span>";
 }
 
 function renderCharacterPreview(character) {
@@ -1205,6 +1286,9 @@ function renderRelationshipChat() {
       const activeClass = state.chatSelectedId === character.id ? "active" : "";
       return `
         <button class="chat-contact ${activeClass}" data-chat-target="${escapeHtml(character.id)}">
+          <div class="chat-contact-avatar">
+            ${renderAvatarMarkup(getCharacterChatIcon(character), character.name, "contact")}
+          </div>
           <div class="chat-contact-top">
             <strong>${escapeHtml(character.name)}</strong>
             <span class="badge">${escapeHtml(relation.title)}</span>
@@ -1227,10 +1311,15 @@ function renderRelationshipChat() {
   const thread = getChatThread(actor.id, target.id);
   elements.chatThreadHeader.innerHTML = `
     <p class="eyebrow">LINE-like Relationship Chat</p>
-    <h2>${escapeHtml(actor.name)} → ${escapeHtml(target.name)}</h2>
-    <p>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect} / 警戒 ${relation.caution}</p>
+    <div class="chat-thread-identity">
+      ${renderAvatarMarkup(getCharacterChatIcon(target), target.name, "thread-header")}
+      <div>
+        <h2>${escapeHtml(actor.name)} → ${escapeHtml(target.name)}</h2>
+        <p>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect} / 警戒 ${relation.caution}</p>
+      </div>
+    </div>
   `;
-  elements.chatThread.innerHTML = renderChatThread(thread);
+  elements.chatThread.innerHTML = renderChatThread(thread, actor, target);
   elements.chatSend.disabled = false;
 }
 
@@ -1248,7 +1337,7 @@ function fillChatParticipants() {
   elements.chatTargetSelect.value = state.chatSelectedId;
 }
 
-function renderChatThread(thread) {
+function renderChatThread(thread, actor, target) {
   if (!thread.length) {
     return `<div class="chat-dayline">まだ会話はありません</div>`;
   }
@@ -1261,10 +1350,15 @@ function renderChatThread(thread) {
       items.push(`<div class="chat-dayline">${escapeHtml(day)}</div>`);
       lastDay = day;
     }
+    const speaker = message.sender === "user" ? actor : target;
+    const icon = message.sender === "user" ? getCharacterChatIcon(actor) : getCharacterChatIcon(target);
     items.push(`
-      <article class="chat-bubble ${message.sender === "user" ? "user" : "character"}">
-        <div>${escapeHtml(message.text)}</div>
-        <span class="chat-bubble-meta">${escapeHtml(formatTimeOnly(message.timestamp))}</span>
+      <article class="chat-line ${message.sender === "user" ? "user" : "character"}">
+        ${renderAvatarMarkup(icon, speaker?.name || "icon", "thread")}
+        <div class="chat-bubble ${message.sender === "user" ? "user" : "character"}">
+          <div>${escapeHtml(message.text)}</div>
+          <span class="chat-bubble-meta">${escapeHtml((speaker?.name || "") + " / " + formatTimeOnly(message.timestamp))}</span>
+        </div>
       </article>
     `);
   });
@@ -1365,8 +1459,11 @@ function renderCharaversePost(post) {
       const commenter = getCharacter(comment.commenterId) || comment.commenterSnapshot || null;
       return `
         <div class="charaverse-comment">
-          <strong>${escapeHtml(commenter?.name || "誰か")}</strong>
-          <div>${escapeHtml(comment.text)}</div>
+          ${renderAvatarMarkup(getCharacterSnsIcon(commenter), commenter?.name || "誰か", "sns-comment")}
+          <div class="charaverse-comment-body">
+            <strong>${escapeHtml(commenter?.name || "誰か")}</strong>
+            <div>${escapeHtml(comment.text)}</div>
+          </div>
         </div>
       `;
     })
@@ -1375,10 +1472,15 @@ function renderCharaversePost(post) {
   return `
     <article class="charaverse-post-card ${isCommunityPost ? "community" : ""}">
       <div class="charaverse-post-head">
-        <strong>${escapeHtml(author?.name || "不明")}</strong>
-        <span class="badge">${escapeHtml(resolveCharaverseLabel(post.genre))}</span>
-        <span class="community-pill">${isCommunityPost ? "PUBLIC" : "LOCAL"}</span>
-        <span class="memory-meta">${escapeHtml(formatTimeOnly(post.timestamp))}</span>
+        ${renderAvatarMarkup(getCharacterSnsIcon(author), author?.name || "不明", "sns-post")}
+        <div class="charaverse-post-identity">
+          <strong>${escapeHtml(author?.name || "不明")}</strong>
+          <div class="charaverse-post-head-meta">
+            <span class="badge">${escapeHtml(resolveCharaverseLabel(post.genre))}</span>
+            <span class="community-pill">${isCommunityPost ? "PUBLIC" : "LOCAL"}</span>
+            <span class="memory-meta">${escapeHtml(formatTimeOnly(post.timestamp))}</span>
+          </div>
+        </div>
       </div>
       ${isCommunityPost ? `<div class="community-readonly">公開元: ${escapeHtml(post.profileName || "匿名オーナー")}</div>` : ""}
       <div>${escapeHtml(post.postText)}</div>
@@ -1488,6 +1590,8 @@ function buildPostAuthorSnapshot(character) {
     tone: character.tone,
     faction: character.faction,
     imageDataUrl: character.imageDataUrl || "",
+    snsImageDataUrl: character.snsImageDataUrl || "",
+    chatImageDataUrl: character.chatImageDataUrl || "",
   };
 }
 
@@ -1657,6 +1761,8 @@ function getPostAuthorCharacter(post) {
     tone: snapshot.tone || "",
     faction: snapshot.faction || "",
     imageDataUrl: snapshot.imageDataUrl || "",
+    snsImageDataUrl: snapshot.snsImageDataUrl || "",
+    chatImageDataUrl: snapshot.chatImageDataUrl || "",
   });
 }
 
@@ -3315,6 +3421,8 @@ function compactCharacterSheet(character) {
     victoryStyle: character.victoryStyle,
     notes: character.notes,
     hasImage: Boolean(character.imageDataUrl),
+    hasSnsIcon: Boolean(character.snsImageDataUrl),
+    hasChatIcon: Boolean(character.chatImageDataUrl),
     stats: character.stats,
   });
 }
@@ -3733,6 +3841,8 @@ function buildBaseCustomCharacterFields(overrides = {}) {
     defeatStyle: "",
     victoryStyle: "",
     notes: "ここに設定メモを書けます。",
+    snsImageDataUrl: "",
+    chatImageDataUrl: "",
     techniques: [],
     stats: { atk: 60, spd: 60, mind: 60, charm: 60 },
     ...overrides,

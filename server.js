@@ -512,6 +512,8 @@ function normalizeCommunityCharacter(character) {
     victoryStyle: normalizeText(character.victoryStyle),
     notes: normalizeText(character.notes),
     imageDataUrl: normalizeImageDataUrl(character.imageDataUrl),
+    snsImageDataUrl: normalizeImageDataUrl(character.snsImageDataUrl),
+    chatImageDataUrl: normalizeImageDataUrl(character.chatImageDataUrl),
     techniques: Array.isArray(character.techniques)
       ? character.techniques.slice(0, 20).map((technique) => ({
           id: normalizeText(technique.id) || createServerId("tech"),
@@ -553,6 +555,8 @@ function normalizeCommunityPost(post) {
       tone: normalizeText(post?.authorSnapshot?.tone),
       faction: normalizeText(post?.authorSnapshot?.faction),
       imageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.imageDataUrl),
+      snsImageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.snsImageDataUrl),
+      chatImageDataUrl: normalizeImageDataUrl(post?.authorSnapshot?.chatImageDataUrl),
     },
     comments: Array.isArray(post.comments)
       ? post.comments.slice(0, 80).map((comment) => normalizeCommunityComment(comment))
@@ -579,6 +583,8 @@ function normalizeCommunityComment(comment) {
       tone: normalizeText(comment?.commenterSnapshot?.tone),
       faction: normalizeText(comment?.commenterSnapshot?.faction),
       imageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.imageDataUrl),
+      snsImageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.snsImageDataUrl),
+      chatImageDataUrl: normalizeImageDataUrl(comment?.commenterSnapshot?.chatImageDataUrl),
     },
   };
 }

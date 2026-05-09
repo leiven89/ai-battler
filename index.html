@@ -115,16 +115,47 @@
               <select name="editorCharacterId" id="editor-character-select"></select>
             </label>
 
-            <div class="image-card">
-              <div class="image-preview" id="character-image-preview">
-                <span>NO IMAGE</span>
+            <div class="image-stack wide">
+              <div class="image-card">
+                <p class="image-label">立ち絵</p>
+                <div class="image-preview" id="character-image-preview">
+                  <span>NO IMAGE</span>
+                </div>
+                <div class="image-actions">
+                  <label class="upload-btn">
+                    画像をアップロード
+                    <input type="file" id="character-image-input" accept="image/*" hidden>
+                  </label>
+                  <button class="secondary-btn" type="button" id="remove-character-image">削除</button>
+                </div>
               </div>
-              <div class="image-actions">
-                <label class="upload-btn">
-                  画像をアップロード
-                  <input type="file" id="character-image-input" accept="image/*" hidden>
-                </label>
-                <button class="secondary-btn" type="button" id="remove-character-image">画像を削除</button>
+
+              <div class="image-card icon-card">
+                <p class="image-label">SNSアイコン</p>
+                <div class="image-preview avatar-preview" id="character-sns-image-preview">
+                  <span>SNS</span>
+                </div>
+                <div class="image-actions">
+                  <label class="upload-btn">
+                    アイコン設定
+                    <input type="file" id="character-sns-image-input" accept="image/*" hidden>
+                  </label>
+                  <button class="secondary-btn" type="button" id="remove-character-sns-image">削除</button>
+                </div>
+              </div>
+
+              <div class="image-card icon-card">
+                <p class="image-label">チャットアイコン</p>
+                <div class="image-preview avatar-preview" id="character-chat-image-preview">
+                  <span>CHAT</span>
+                </div>
+                <div class="image-actions">
+                  <label class="upload-btn">
+                    アイコン設定
+                    <input type="file" id="character-chat-image-input" accept="image/*" hidden>
+                  </label>
+                  <button class="secondary-btn" type="button" id="remove-character-chat-image">削除</button>
+                </div>
               </div>
             </div>
 
