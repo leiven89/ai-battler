@@ -5515,6 +5515,963 @@ async function generateAiRelationshipReply({ actor, target, relation, playerMess
   return JSON.parse(text);
 }
 
+function inferMemoryCategory(title, body) {
+  const text = `${title || ""} ${body || ""}`;
+  if (/フォロー|いいね|コメント|投稿|キャラバース|SNS|リプライ/.test(text)) return "social";
+  if (/バトル|勝利|敗北|再戦|模擬戦|戦/.test(text)) return "battle";
+  if (/チャット|会話|話した|話して/.test(text)) return "chat";
+  return "general";
+}
+
+function inferMemoryTags(title, body, category = "") {
+  const text = `${title || ""} ${body || ""}`;
+  const tags = new Set();
+  const finalCategory = category || inferMemoryCategory(title, body);
+  tags.add(finalCategory);
+  if (/フォロー/.test(text)) tags.add("follow");
+  if (/いいね|反応/.test(text)) tags.add("like");
+  if (/コメント|リプライ|返信/.test(text)) tags.add("comment");
+  if (/投稿/.test(text)) tags.add("post");
+  if (/バトル|勝利|敗北|再戦|模擬戦|戦/.test(text)) tags.add("battle");
+  if (/チャット|会話/.test(text)) tags.add("chat");
+  return [...tags];
+}
+
+function saveMemory(opponentId, title, body, sourceId = "", category = "", tags = []) {
+  const resolvedCategory = category || inferMemoryCategory(title, body);
+  const resolvedTags = [...new Set([...(Array.isArray(tags) ? tags : []), ...inferMemoryTags(title, body, resolvedCategory)])];
+  state.memories.push({
+    id: createId(),
+    opponentId,
+    sourceId,
+    title,
+    body,
+    category: resolvedCategory,
+    tags: resolvedTags,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function getRelevantMemoriesForPair(actorId, targetId, limit = 6) {
+  return [...state.memories]
+    .filter((memory) => memory.opponentId === targetId && (!actorId || !memory.sourceId || memory.sourceId === actorId))
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, limit);
+}
+
+function getRecentSocialMemoriesForPair(actorId, targetId, limit = 4) {
+  return getRelevantMemoriesForPair(actorId, targetId, limit * 3)
+    .filter((memory) => memory.category === "social" || (memory.tags || []).some((tag) => ["social", "follow", "like", "comment", "post"].includes(tag)))
+    .slice(0, limit);
+}
+
+function rememberRelationshipEvent({
+  actorId,
+  targetId,
+  actorTitle,
+  actorBody,
+  actorDelta = null,
+  targetTitle = "",
+  targetBody = "",
+  targetDelta = null,
+  category = "social",
+  tags = [],
+}) {
+  if (!actorId || !targetId || actorId === targetId) return;
+
+  const actorRelation = getRelation(actorId, targetId);
+  if (actorDelta) applyRelationDelta(actorRelation, actorDelta);
+  actorRelation.title = resolveRelationshipTitle(actorRelation);
+  if (actorBody) actorRelation.lastMemory = actorBody;
+  if (actorTitle && actorBody) {
+    saveMemory(targetId, actorTitle, actorBody, actorId, category, tags);
+  }
+
+  if (!targetBody && !targetTitle && !targetDelta) return;
+
+  const reverseRelation = getRelation(targetId, actorId);
+  if (targetDelta) applyRelationDelta(reverseRelation, targetDelta);
+  reverseRelation.title = resolveRelationshipTitle(reverseRelation);
+  if (targetBody) reverseRelation.lastMemory = targetBody;
+  if (targetTitle && targetBody) {
+    saveMemory(actorId, targetTitle, targetBody, targetId, category, tags);
+  }
+}
+
+function buildSocialCallbackLine(target, socialMemory, forwardHook) {
+  const text = `${socialMemory?.title || ""} ${socialMemory?.body || ""}`;
+  if (/フォロー/.test(text)) {
+    return `……そういえば、フォローありがと。見てくれてるって分かると、少しだけ話しやすい。${forwardHook}`;
+  }
+  if (/コメント|リプライ|返信/.test(text)) {
+    return `この前のコメント、ちゃんと覚えてる。ああいう一言って、思ったより残るんだよな。${forwardHook}`;
+  }
+  if (/いいね|反応/.test(text)) {
+    return `前に反応をくれただろ。あれ、何でもない顔をしたくせに少し嬉しかった。${forwardHook}`;
+  }
+  if (/投稿/.test(text)) {
+    return `あの投稿のこと、まだ頭に残ってる。文字だけのはずなのに、案外その人らしさって出るんだな。${forwardHook}`;
+  }
+  return `${target.name}の中には、前に交わした小さな出来事がまだ残っているようだった。${forwardHook}`;
+}
+
+function toggleProfileFollow(profileKey) {
+  const viewerId = getProfileViewerId();
+  if (!viewerId || !profileKey || profileKey === `character:${viewerId}`) {
+    return;
+  }
+
+  const viewer = getCharacter(viewerId);
+  const descriptor = resolveProfileDescriptorByKey(profileKey);
+  const targetCharacter = descriptor?.sourceCharacter || null;
+  const key = `${viewerId}:${profileKey}`;
+  const wasFollowing = Boolean(state.charaverseFollows?.[key]);
+
+  state.charaverseFollows[key] = !wasFollowing;
+  if (!state.charaverseFollows[key]) {
+    delete state.charaverseFollows[key];
+  }
+
+  if (viewer && targetCharacter && viewer.id !== targetCharacter.id) {
+    if (!wasFollowing) {
+      rememberRelationshipEvent({
+        actorId: viewer.id,
+        targetId: targetCharacter.id,
+        actorTitle: `キャラバース: ${viewer.name}がフォロー`,
+        actorBody: `${targetCharacter.name}をフォローした。もっと相手のことを知りたいと思った。`,
+        actorDelta: { friendship: 1, respect: 1, caution: -1 },
+        targetTitle: `キャラバース: ${viewer.name}からフォロー`,
+        targetBody: `${viewer.name}がフォローしてくれた。少し距離が近づいた気がした。`,
+        targetDelta: { friendship: 2, caution: -1 },
+        category: "social",
+        tags: ["charaverse", "follow"],
+      });
+    } else {
+      rememberRelationshipEvent({
+        actorId: viewer.id,
+        targetId: targetCharacter.id,
+        actorTitle: `キャラバース: ${viewer.name}がフォロー解除`,
+        actorBody: `${targetCharacter.name}のフォローを外した。少し距離を置いて様子を見ることにした。`,
+        actorDelta: { caution: 1 },
+        targetTitle: `キャラバース: ${viewer.name}が離れた`,
+        targetBody: `${viewer.name}の気配が少し遠のいた。理由はまだ分からない。`,
+        targetDelta: { caution: 1 },
+        category: "social",
+        tags: ["charaverse", "follow"],
+      });
+    }
+  }
+
+  saveState();
+  renderAll();
+}
+
+async function handleCharaverseLike(postId) {
+  const post = getCharaversePost(postId);
+  if (!post) return;
+  const actorSelect = document.querySelector(`[data-charaverse-actor="${postId}"]`);
+  const reactor = getCharacter(actorSelect?.value || "");
+  const author = getCharacter(post.authorId);
+  if (!reactor || !author || reactor.id === author.id) return;
+
+  const relation = getRelation(reactor.id, author.id);
+  const reaction = buildCharaverseReaction(reactor, author, relation, post, "like");
+  post.reactions = (post.reactions || []).filter((item) => item.reactorId !== reactor.id);
+  post.reactions.push(reaction);
+  applyRelationDelta(relation, reaction.delta);
+  relation.title = resolveRelationshipTitle(relation);
+  relation.lastMemory = reaction.memory;
+  saveMemory(author.id, `キャラバースいいね: ${reactor.name}`, reaction.memory, reactor.id, "social", ["charaverse", "like"]);
+
+  const reverseRelation = getRelation(author.id, reactor.id);
+  applyRelationDelta(reverseRelation, {
+    friendship: Math.max(1, reaction.delta.friendship || 0),
+    respect: reaction.delta.respect > 0 ? 1 : 0,
+    caution: reaction.delta.caution < 0 ? -1 : 0,
+  });
+  reverseRelation.title = resolveRelationshipTitle(reverseRelation);
+  reverseRelation.lastMemory = `${reactor.name}が投稿に反応してくれた。ちゃんと見てくれていたらしい。`;
+  saveMemory(reactor.id, `キャラバース反応: ${reactor.name}`, reverseRelation.lastMemory, author.id, "social", ["charaverse", "like"]);
+
+  saveState();
+  renderAll();
+}
+
+async function handleCharaverseManualComment(postId) {
+  const post = getAnyCharaversePost(postId);
+  if (!post) return;
+  const actorSelect = document.querySelector(`[data-charaverse-actor="${postId}"]`);
+  const input = document.querySelector(`[data-charaverse-comment-input="${postId}"]`);
+  const commenter = getCharacter(actorSelect?.value || "");
+  const author = getPostAuthorCharacter(post);
+  const rawInput = String(input?.value || "").trim();
+  if (!commenter || !author || !rawInput) return;
+
+  const relation = getRelation(commenter.id, author.id);
+  let text = "";
+  if (canUseApi()) {
+    try {
+      const generated = await generateAiCharaverseComment({ commenter, author, relation, post, rawInput });
+      text = generated.commentText;
+      state.settings.apiStatus = `キャラバースコメント生成: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `キャラバースコメントはローカル補正へ切替: ${error.message}`;
+    }
+  }
+  if (!text) {
+    text = generateLocalManualCharaverseComment(commenter, author, rawInput);
+  }
+
+  const delta = inferCharaverseCommentDelta(post, relation, text);
+  const replyContext = state.charaverseReplyContext?.postId === post.id
+    ? state.charaverseReplyContext
+    : null;
+  const commentEntry = {
+    id: createId(),
+    commenterId: commenter.id,
+    commenterSnapshot: buildPostAuthorSnapshot(commenter),
+    profileId: state.communityProfileId,
+    profileName: getCommunityProfileName(),
+    text,
+    timestamp: new Date().toISOString(),
+    parentCommentId: replyContext?.commentId || "",
+    replyToName: replyContext?.targetName || "",
+    delta,
+    memory: `${commenter.name}が${author.name}の投稿にコメントした。`,
+  };
+
+  if (post.scope === "community") {
+    await publishCommunityComment(post, author, commenter, commentEntry);
+  } else {
+    post.comments = post.comments || [];
+    post.comments.push(commentEntry);
+    applyRelationDelta(relation, delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = `${commenter.name}が${author.name}の投稿にコメントした。`;
+  }
+
+  saveMemory(author.id, `キャラバースコメント: ${commenter.name}`, `${commenter.name}が${author.name}の投稿にコメントした。`, commenter.id, "social", ["charaverse", "comment"]);
+
+  const reverseRelation = getRelation(author.id, commenter.id);
+  applyRelationDelta(reverseRelation, {
+    friendship: Math.max(1, delta.friendship || 0),
+    respect: delta.respect > 0 ? 1 : 0,
+    caution: delta.caution > 0 ? 1 : 0,
+  });
+  reverseRelation.title = resolveRelationshipTitle(reverseRelation);
+  reverseRelation.lastMemory = `${commenter.name}が投稿へ言葉を返してくれた。会話の続きが生まれた。`;
+  saveMemory(commenter.id, `キャラバース返信: ${commenter.name}`, reverseRelation.lastMemory, author.id, "social", ["charaverse", "comment"]);
+
+  saveState();
+  if (input) input.value = "";
+  if (replyContext) {
+    clearReplyContext();
+    return;
+  }
+  renderAll();
+}
+
+function generateLocalRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
+  const warm = relation.friendship >= 24;
+  const hostile = relation.rivalry >= 24 || relation.caution >= 24;
+  const respectful = relation.respect >= 18;
+  const voice = archetypeVoices[target.archetype] || archetypeVoices.cool;
+  const lastMemory = relation.lastMemory || "";
+  const recentMemories = getRelevantMemoriesForPair(actor.id, target.id, 4);
+  const recentSocial = getRecentSocialMemoriesForPair(actor.id, target.id, 3);
+  const recentThread = getChatThread(actor.id, target.id).slice(-4).map((item) => item.text).join(" ");
+  const conversationMove = chooseLocalConversationMove(target, relation, chatMeta, inferredTopic);
+  const forwardHook = buildForwardHook(target, relation, inferredTopic, conversationMove);
+  const socialMemory = recentSocial[0] || null;
+  const casualTalk = inferredTopic === "general" || inferredTopic === "daily" || inferredTopic === "emotion" || /ありがとう|よろしく|元気|ひさしぶり|最近|そういえば|この前|前に|話/.test(message);
+
+  if (socialMemory && casualTalk) {
+    return buildSocialCallbackLine(target, socialMemory, forwardHook);
+  }
+
+  if (/この前|さっき|前に|前回/.test(message) && lastMemory) {
+    return `覚えてる。${lastMemory}……あれから少しだけ、見えるものが変わった。${forwardHook}`;
+  }
+
+  if (recentMemories.some((memory) => /挑発|因縁|屈辱/.test(memory.body)) && delta.friendship > 0) {
+    return `優しい言い方をするんだな。そういう不意打ちは、嫌いじゃない。けど簡単に気は抜かない。${forwardHook}`;
+  }
+
+  if (recentThread && /ありがとう|助かった/.test(recentThread) && delta.friendship > 0) {
+    return `礼なら受け取っておく。……でも、言葉だけで終わらせるつもりはないんだろ。${forwardHook}`;
+  }
+
+  if (delta.friendship >= 2 && warm) {
+    if (target.archetype === "gentle") return `うん、その言葉はちゃんと嬉しいよ。こうして少しずつ話せる時間が増えるの、嫌いじゃない。${forwardHook}`;
+    if (target.archetype === "cool") return `そういう言葉は軽く流せないな。礼は受け取る。次は行動で返してみせて。${forwardHook}`;
+  }
+
+  if (delta.respect >= 2 && respectful) {
+    if (target.archetype === "proud") return `見る目はあるみたいだな。褒めるだけで終わるなら薄いが、次の一手まで見ているなら話は別だ。${forwardHook}`;
+    return `その見方は悪くない。表面だけじゃなく中身まで見ようとしているのが分かる。${forwardHook}`;
+  }
+
+  if (delta.rivalry >= 2 && hostile) {
+    if (target.archetype === "proud") return `そんなふうに火をつけるつもりなら、最後まで責任を持て。中途半端な挑発は嫌いだ。${forwardHook}`;
+    if (target.archetype === "rough") return `いいじゃねえか。その言い方、まだ伸びしろがある。次はもっと本気でぶつけてこいよ。${forwardHook}`;
+    return `わざわざそこを突くのか。……でも、その刺のある言い方は案外嫌いじゃない。${forwardHook}`;
+  }
+
+  if (delta.caution > 0 && relation.caution >= 20) {
+    return `……その言葉、まだ全部は信じない。けど無視するほど鈍くもない。続きを聞かせて。${forwardHook}`;
+  }
+
+  if (/バトル|戦|次/.test(message)) {
+    return warm
+      ? `次に戦う時は、今よりもっとお互いを知った状態だろうな。だからこそ面白くなりそうだ。${forwardHook}`
+      : hostile
+        ? `次があるなら、今度はもっと深く切り込む。戦場では言葉の続きも刃で証明してみせろ。${forwardHook}`
+        : `次に向けて考えてることはある。けど、先にお前の見ている景色も聞かせろ。${forwardHook}`;
+  }
+
+  if (warm) {
+    return `${voice.greeting} こうして話していると、戦っている時とは違う顔が見えるな。だから会話も無駄じゃない。${forwardHook}`;
+  }
+
+  if (hostile) {
+    return `${voice.resolve} まだ全部を許したわけじゃない。けど、言葉を交わす価値くらいは見てる。${forwardHook}`;
+  }
+
+  if (respectful) {
+    return `あんたの言葉は、雑に流すには少し重い。だからこそ、ちゃんと返したくなる。${forwardHook}`;
+  }
+
+  return `${voice.resolve} 話は聞いてる。……でも、ただ頷くだけで終わるつもりはない。${forwardHook}`;
+}
+
+function buildRelationshipHistorySnapshot(actorId, targetId, options = {}) {
+  const relation = getRelation(actorId, targetId);
+  const chatMeta = getChatMeta(actorId, targetId);
+  const battleBundle = actorId === "player" ? getBattleRecordBundle(targetId) : getEmptyBattleRecordBundle();
+  const memories = getRelevantMemoriesForPair(actorId, targetId, 8)
+    .map((memory) => ({
+      title: memory.title,
+      body: memory.body,
+      category: memory.category || "",
+      tags: memory.tags || [],
+      timestamp: memory.timestamp,
+    }));
+  const socialSignals = getRecentSocialMemoriesForPair(actorId, targetId, 4)
+    .map((memory) => ({
+      title: memory.title,
+      body: memory.body,
+      timestamp: memory.timestamp,
+    }));
+  const chatDigest = getChatThread(actorId, targetId)
+    .slice(-8)
+    .map((message) => ({
+      sender: message.sender,
+      speakerRole: message.speakerRole || (message.sender === "user" ? "actor" : "target"),
+      speakerId: message.speakerId || "",
+      speakerName: message.speakerName || "",
+      text: message.text,
+      timestamp: message.timestamp,
+    }));
+
+  const payload = {
+    relationTitle: relation.title,
+    relationValues: {
+      friendship: relation.friendship,
+      rivalry: relation.rivalry,
+      respect: relation.respect,
+      caution: relation.caution,
+    },
+    conversationMeta: chatMeta,
+    lastMemory: relation.lastMemory,
+    battleHistory: battleBundle,
+    recentMemories: memories,
+    recentSocialSignals: socialSignals,
+    recentChat: chatDigest,
+  };
+
+  if (options.includeBattle && options.battle) {
+    payload.currentBattleLog = options.battle.logs
+      .slice(-8)
+      .map((entry) => ({
+        label: entry.label,
+        text: entry.text,
+      }));
+  }
+
+  return JSON.stringify(payload);
+}
+
+function openingLine(player, enemy, relation) {
+  const socialMemory = getRecentSocialMemoriesForPair(player.id, enemy.id, 1)[0];
+  const socialText = `${socialMemory?.title || ""} ${socialMemory?.body || ""}`;
+  if (/フォロー/.test(socialText)) {
+    return `${enemy.name}は構えを崩さないまま、ほんの少しだけ目元を和らげた。「……そういえば、フォローしてくれたな。礼はまだ言ってなかった」`;
+  }
+  if (/コメント|リプライ|返信/.test(socialText)) {
+    return `${enemy.name}は刃先の向こうで息を整える。「あの投稿に言葉をくれた相手か。だったら、今日の一手にも少しは意味が出る」`;
+  }
+  if (/いいね|反応/.test(socialText)) {
+    return `${enemy.name}は静かに視線を上げた。「前に反応だけ残していっただろ。ああいう無言の気配も、案外覚えてる」`;
+  }
+  if (relation.rivalry >= 20) {
+    return `${enemy.name}は因縁を燃やすようにこちらを見た。「また逃げるつもりなら無駄だ。今日はその続きを終わらせる」`;
+  }
+  if (relation.friendship >= 18) {
+    return `${enemy.name}は柔らかく息をついた。「今日は手加減なしだ。それでも、終わったらちゃんと話そう」`;
+  }
+  return "初対面の空気が張りつめる。ここで交わす言葉が、次の関係を決めるかもしれない。";
+}
+
+async function generateAiRelationshipReply({ actor, target, relation, playerMessage, thread, chatMeta, battleBundle, inferredTopic }) {
+  const historySnapshot = buildRelationshipHistorySnapshot(actor.id, target.id, {
+    includeBattle: false,
+  });
+  const namedThread = buildNamedRelationshipThread(actor, target, thread);
+  const availableAnchors = collectCharacterAnchors(target).slice(0, 12);
+  const actorAnchors = collectCharacterAnchors(actor).slice(0, 6);
+  const recentCharacterReplies = thread
+    .filter((item) => item.sender === "character")
+    .slice(-4)
+    .map((item) => item.text);
+  const socialSignals = getRecentSocialMemoriesForPair(actor.id, target.id, 4).map((memory) => ({
+    title: memory.title,
+    body: memory.body,
+    timestamp: memory.timestamp,
+  }));
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are writing a Japanese messenger-app reply for an original character relationship game.",
+    "This is not a generic chatbot. It is a living character replying in their own voice.",
+    "Use the target character's full sheet, battle records, memories, habits, likes, dislikes, faction, origin, techniques, SNS traces, and prior interactions.",
+    "The tone should feel like a fusion of a novel scene and an in-game conversation, but still read naturally in chat.",
+    "The actor and target are different people. Never swap them. Only write the target's reply.",
+    "",
+    `Actor character: ${compactCharacterSheet(actor)}`,
+    `Target character: ${compactCharacterSheet(target)}`,
+    `Relationship: ${JSON.stringify(relation)}`,
+    `Battle record summary: ${JSON.stringify(battleBundle)}`,
+    `Relationship history snapshot: ${historySnapshot}`,
+    `Recent social signals: ${JSON.stringify(socialSignals)}`,
+    `Conversation meta: ${JSON.stringify(chatMeta)}`,
+    `Inferred topic: ${inferredTopic}`,
+    `Actor message: ${playerMessage}`,
+    `Recent named thread: ${JSON.stringify(namedThread)}`,
+    `Recent target replies to avoid repeating: ${JSON.stringify(recentCharacterReplies)}`,
+    `Target anchors: ${JSON.stringify(availableAnchors)}`,
+    `Actor anchors: ${JSON.stringify(actorAnchors)}`,
+    "",
+    "Requirements:",
+    "- reply should be 2 to 4 Japanese sentences.",
+    "- include one concrete detail tied to the target character whenever possible.",
+    "- do one forward move: ask, reveal, invite, challenge, or reflect.",
+    "- do not end with only vague agreement or a generic emotional echo.",
+    "- when battle history matters, correctly understand who won, who lost, and whether it was close or decisive.",
+    "- if there was a recent follow, like, comment, post, or battle event, you may naturally bring it up during small talk or thanks.",
+    "- avoid repeating the same phrase openings as the last few replies.",
+    "- moodNote should summarize the emotional reaction in one sentence.",
+    "- memoryHint should be short and suitable for a memory log.",
+    "- moveType should be one of ask, reveal, invite, challenge, reflect.",
+    "- nextHook should be a short phrase describing the next conversational opening.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.9, state.settings.temperature),
+    maxTokens: 560,
+    responseSchema: {
+      type: "object",
+      required: ["reply", "moodNote", "memoryHint", "moveType", "nextHook"],
+      properties: {
+        reply: { type: "string" },
+        moodNote: { type: "string" },
+        memoryHint: { type: "string" },
+        moveType: { type: "string" },
+        nextHook: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getSharedWorldGlossary() {
+  return {
+    battle: "バトルは、この世界でキャラ同士が戦い、関係を深める公式な戦闘や模擬戦の総称。",
+    charaverse: "キャラバースは、キャラ本人が投稿・反応・交流するSNSの固有名詞。全キャラがこの名称を理解している。",
+  };
+}
+
+function normalizeRelationshipReplyText(actor, target, replyText) {
+  const actorName = actor?.name || "";
+  const targetName = target?.name || "";
+  let cleaned = String(replyText || "")
+    .replace(/\r/g, " ")
+    .replace(/\n+/g, " ")
+    .replace(/[“”「」『』]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  if (!cleaned) {
+    return "……分かった。もう少し話そう。";
+  }
+
+  if (actorName) {
+    const actorSpeechPattern = new RegExp(`${escapeRegExp(actorName)}[^。！？!?]*?(言った|話した|頼んだ|尋ねた|告げた)[^。！？!?]*[。！？!?]?`, "g");
+    cleaned = cleaned.replace(actorSpeechPattern, "");
+  }
+  if (targetName) {
+    const targetLeadPattern = new RegExp(`^${escapeRegExp(targetName)}(?:は|が)?\\s*`);
+    cleaned = cleaned.replace(targetLeadPattern, "");
+  }
+
+  cleaned = cleaned.replace(/[^。！？!?]*って、言葉にすると[^。！？!?]*[。！？!?]?/g, "");
+  cleaned = cleaned.replace(/[^。！？!?]*(プロフィール|キャラシ|設定で言えば|要するに|一人称|二人称|能力|戦闘スタイル|好きな言い回し|嫌いな言い回し|奥義)[^。！？!?]*[。！？!?]?/g, "");
+  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+
+  const pieces = cleaned
+    .split(/(?<=[。！？!?])/)
+    .map((piece) => piece.trim())
+    .filter(Boolean)
+    .filter((piece) => {
+      if (actorName && new RegExp(`${escapeRegExp(actorName)}.*(言った|話した|頼んだ|尋ねた|告げた)`).test(piece)) return false;
+      if (/説明すると|プロフィール|キャラシ|設定で言えば|要するに/.test(piece)) return false;
+      return true;
+    });
+
+  return pieces.join(" ").trim() || "……分かった。続けよう。";
+}
+
+function diversifyRelationshipReply({ actorId, targetId, target, replyText, inferredTopic, chatMeta }) {
+  const actor = getCharacter(actorId);
+  const baseReply = normalizeRelationshipReplyText(actor, target, replyText);
+  const thread = getChatThread(actorId, targetId);
+  const recentCharacterReplies = thread
+    .filter((item) => item.sender === "character")
+    .slice(-3)
+    .map((item) => item.text);
+  const signature = generateReplySignature(baseReply);
+  const tooShort = String(baseReply || "").length < 26;
+  const tooGeneric = /(そう|悪くない|話は聞いている|次の言葉で返す|覚えている)/.test(baseReply || "");
+  const tooSimilar = recentCharacterReplies.some((item) => calculateReplySimilarity(signature, generateReplySignature(item)) >= 0.7);
+
+  if (!tooShort && !tooGeneric && !tooSimilar) {
+    return { text: baseReply, anchorKey: "" };
+  }
+
+  const anchor = selectCharacterAnchor(target, inferredTopic, chatMeta);
+  if (!anchor) {
+    return { text: baseReply, anchorKey: "" };
+  }
+
+  const anchorSentence = buildAnchorSentence(target, anchor);
+  const merged = tooShort || tooSimilar
+    ? `${anchorSentence} ${baseReply}`.trim()
+    : `${baseReply} ${anchorSentence}`.trim();
+
+  return {
+    text: normalizeRelationshipReplyText(actor, target, merged),
+    anchorKey: anchor.key,
+  };
+}
+
+function generateLocalRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic) {
+  const warm = relation.friendship >= 24;
+  const hostile = relation.rivalry >= 24 || relation.caution >= 24;
+  const respectful = relation.respect >= 18;
+  const voice = archetypeVoices[target.archetype] || archetypeVoices.cool;
+  const lastMemory = relation.lastMemory || "";
+  const recentMemories = getRelevantMemoriesForPair(actor.id, target.id, 4);
+  const recentSocial = getRecentSocialMemoriesForPair(actor.id, target.id, 3);
+  const recentThread = getChatThread(actor.id, target.id).slice(-4).map((item) => item.text).join(" ");
+  const conversationMove = chooseLocalConversationMove(target, relation, chatMeta, inferredTopic);
+  const forwardHook = buildForwardHook(target, relation, inferredTopic, conversationMove);
+  const socialMemory = recentSocial[0] || null;
+  const casualTalk = inferredTopic === "general" || inferredTopic === "daily" || inferredTopic === "emotion" || /ありがとう|よろしく|元気|ひさしぶり|最近|そういえば|この前|前に|話/.test(message);
+
+  if (socialMemory && casualTalk) {
+    return normalizeRelationshipReplyText(actor, target, buildSocialCallbackLine(target, socialMemory, forwardHook));
+  }
+
+  if (/この前|さっき|前に|前回/.test(message) && lastMemory) {
+    return normalizeRelationshipReplyText(actor, target, `覚えてる。${lastMemory}……あれから少しだけ、見えるものが変わった。${forwardHook}`);
+  }
+
+  if (recentMemories.some((memory) => /挑発|因縁|屈辱/.test(memory.body)) && delta.friendship > 0) {
+    return normalizeRelationshipReplyText(actor, target, `優しい言い方をするんだな。そういう不意打ちは、嫌いじゃない。けど簡単に気は抜かない。${forwardHook}`);
+  }
+
+  if (recentThread && /ありがとう|助かった/.test(recentThread) && delta.friendship > 0) {
+    return normalizeRelationshipReplyText(actor, target, `礼なら受け取っておく。……でも、言葉だけで終わらせるつもりはないんだろ。${forwardHook}`);
+  }
+
+  if (/キャラバース|SNS/.test(message)) {
+    return normalizeRelationshipReplyText(actor, target, warm
+      ? `キャラバースで見る姿と、こうして話す時の温度は少し違うだろ。だからこそ面白い。${forwardHook}`
+      : hostile
+        ? `キャラバースで何を見たのかは知らないが、文字だけで測れるほど単純じゃない。続きがあるなら聞く。${forwardHook}`
+        : `キャラバースの話か。あそこは戦場とは別の意味で、相手の素が出る場所だと思ってる。${forwardHook}`);
+  }
+
+  if (/バトル|戦|次/.test(message)) {
+    return normalizeRelationshipReplyText(actor, target, warm
+      ? `次に戦う時は、今よりもっとお互いを知った状態だろうな。だからこそ面白くなりそうだ。${forwardHook}`
+      : hostile
+        ? `次があるなら、今度はもっと深く切り込む。バトルでは言葉の続きも刃で証明してみせろ。${forwardHook}`
+        : `次のバトルに向けて考えてることはある。けど、先にお前の見ている景色も聞かせろ。${forwardHook}`);
+  }
+
+  if (delta.friendship >= 2 && warm) {
+    return normalizeRelationshipReplyText(actor, target, target.archetype === "gentle"
+      ? `うん、その言葉はちゃんと嬉しいよ。こうして少しずつ話せる時間が増えるの、嫌いじゃない。${forwardHook}`
+      : `そういう言葉は軽く流せないな。礼は受け取る。次は行動で返してみせて。${forwardHook}`);
+  }
+
+  if (delta.respect >= 2 && respectful) {
+    return normalizeRelationshipReplyText(actor, target, target.archetype === "proud"
+      ? `見る目はあるみたいだな。褒めるだけで終わるなら薄いが、次の一手まで見ているなら話は別だ。${forwardHook}`
+      : `その見方は悪くない。表面だけじゃなく中身まで見ようとしているのが分かる。${forwardHook}`);
+  }
+
+  if (delta.rivalry >= 2 && hostile) {
+    return normalizeRelationshipReplyText(actor, target, target.archetype === "rough"
+      ? `いいじゃねえか。その言い方、まだ伸びしろがある。次はもっと本気でぶつけてこいよ。${forwardHook}`
+      : `わざわざそこを突くのか。……でも、その刺のある言い方は案外嫌いじゃない。${forwardHook}`);
+  }
+
+  if (delta.caution > 0 && relation.caution >= 20) {
+    return normalizeRelationshipReplyText(actor, target, `……その言葉、まだ全部は信じない。けど無視するほど鈍くもない。続きを聞かせて。${forwardHook}`);
+  }
+
+  if (warm) {
+    return normalizeRelationshipReplyText(actor, target, `${voice.greeting} こうして話していると、戦っている時とは違う顔が見えるな。だから会話も無駄じゃない。${forwardHook}`);
+  }
+  if (hostile) {
+    return normalizeRelationshipReplyText(actor, target, `${voice.resolve} まだ全部を許したわけじゃない。けど、言葉を交わす価値くらいは見てる。${forwardHook}`);
+  }
+  if (respectful) {
+    return normalizeRelationshipReplyText(actor, target, `あんたの言葉は、雑に流すには少し重い。だからこそ、ちゃんと返したくなる。${forwardHook}`);
+  }
+  return normalizeRelationshipReplyText(actor, target, `${voice.resolve} 話は聞いてる。……でも、ただ頷くだけで終わるつもりはない。${forwardHook}`);
+}
+
+async function sendDirectRelationshipChat(message, actorId, targetId) {
+  const actor = getCharacter(actorId);
+  const target = getCharacter(targetId);
+  const relation = getRelation(actorId, targetId);
+  const thread = getChatThread(actorId, targetId);
+  const chatMeta = getChatMeta(actorId, targetId);
+  const battleBundle = actorId === "player" ? getBattleRecordBundle(targetId) : getEmptyBattleRecordBundle();
+  const delta = analyzeChatMessageEffect(message, relation);
+  const inferredTopic = inferConversationTopic(message, target);
+
+  thread.push({
+    id: createId(),
+    sender: "user",
+    speakerRole: "actor",
+    speakerId: actor.id,
+    speakerName: actor.name,
+    text: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  applyRelationDelta(relation, delta);
+  relation.title = resolveRelationshipTitle(relation);
+
+  let replyPayload = null;
+  if (canUseApi()) {
+    try {
+      replyPayload = await generateAiRelationshipReply({
+        actor,
+        target,
+        relation,
+        playerMessage: message,
+        thread,
+        chatMeta,
+        battleBundle,
+        inferredTopic,
+      });
+      state.settings.apiStatus = `莨夊ｩｱAI逕滓・: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `莨夊ｩｱAI縺ｯ繝ｭ繝ｼ繧ｫ繝ｫ陬懈ｭ｣縺ｸ蛻・崛: ${error.message}`;
+    }
+  }
+
+  const rawReplyText = replyPayload?.reply || generateBattleAwareRelationshipReply(actor, target, relation, message, delta, chatMeta, battleBundle, inferredTopic);
+  const diversifiedReply = diversifyRelationshipReply({
+    actorId,
+    targetId,
+    target,
+    relation,
+    replyText: rawReplyText,
+    inferredTopic,
+    chatMeta,
+    battleBundle,
+  });
+  const replyText = normalizeRelationshipReplyText(actor, target, diversifiedReply.text);
+
+  thread.push({
+    id: createId(),
+    sender: "character",
+    speakerRole: "target",
+    speakerId: target.id,
+    speakerName: target.name,
+    text: replyText,
+    timestamp: new Date().toISOString(),
+  });
+
+  relation.lastMemory = replyPayload?.memoryHint || buildChatMemoryHint(target, delta);
+  relation.title = resolveRelationshipTitle(relation);
+  updateChatMeta(actorId, targetId, {
+    userMessage: message,
+    replyText,
+    inferredTopic,
+    moveType: replyPayload?.moveType || "local",
+    nextHook: replyPayload?.nextHook || "",
+    anchorKey: diversifiedReply.anchorKey || "",
+  });
+  saveMemory(targetId, `莨夊ｩｱ: ${actor?.name || "actor"} 竊・${target.name}`, relation.lastMemory, actorId);
+  saveState();
+}
+
+async function sendGroupRelationshipChat(message, actorId, groupId) {
+  const actor = getCharacter(actorId);
+  const group = getChatGroupById(groupId);
+  if (!actor || !group) return;
+  const members = getGroupMembers(group).filter((member) => member.id !== actor.id);
+  if (!members.length) return;
+
+  const thread = getGroupChatThread(actorId, groupId);
+  const chatMeta = getGroupChatMeta(actorId, groupId);
+  const inferredTopic = inferConversationTopic(message, members[0] || actor);
+
+  thread.push({
+    id: createId(),
+    sender: "user",
+    speakerRole: "actor",
+    speakerId: actor.id,
+    speakerName: actor.name,
+    text: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  let responsePayload = null;
+  if (canUseApi()) {
+    try {
+      responsePayload = await generateAiGroupRelationshipReply({
+        actor,
+        group,
+        members,
+        thread,
+        chatMeta,
+        playerMessage: message,
+        inferredTopic,
+      });
+      state.settings.apiStatus = `繧ｰ繝ｫ繝ｼ繝嶺ｼ夊ｩｱAI逕滓・: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `繧ｰ繝ｫ繝ｼ繝嶺ｼ夊ｩｱ縺ｯ繝ｭ繝ｼ繧ｫ繝ｫ陬懈ｭ｣縺ｸ蛻・崛: ${error.message}`;
+    }
+  }
+
+  const replies = responsePayload?.responses?.length
+    ? responsePayload.responses
+    : generateLocalGroupReplies({ actor, members, message, chatMeta, inferredTopic, groupId });
+
+  replies.slice(0, Math.min(3, members.length)).forEach((item) => {
+    const speaker = members.find((member) => member.id === item.speakerId) || members[0];
+    if (!speaker) return;
+    const normalizedReply = normalizeRelationshipReplyText(actor, speaker, item.reply);
+    const relation = getRelation(actor.id, speaker.id);
+    const delta = analyzeChatMessageEffect(message, relation);
+    applyRelationDelta(relation, delta);
+    relation.title = resolveRelationshipTitle(relation);
+    relation.lastMemory = item.memoryHint || `${speaker.name} がグループチャットで返事をした。`;
+    thread.push({
+      id: createId(),
+      sender: "character",
+      speakerRole: "member",
+      speakerId: speaker.id,
+      speakerName: speaker.name,
+      text: normalizedReply,
+      timestamp: new Date().toISOString(),
+    });
+    saveMemory(speaker.id, `繧ｰ繝ｫ繝ｼ繝嶺ｼ夊ｩｱ: ${group.name}`, relation.lastMemory, actor.id);
+  });
+
+  updateChatMeta(actorId, getChatPseudoGroupId(groupId), {
+    userMessage: message,
+    replyText: replies.map((item) => `${item.speakerId}:${normalizeRelationshipReplyText(actor, members.find((member) => member.id === item.speakerId) || members[0], item.reply)}`).join(" / "),
+    inferredTopic,
+    moveType: responsePayload?.moveType || "group",
+    nextHook: responsePayload?.nextHook || "",
+    anchorKey: "",
+  });
+  saveState();
+}
+
+async function generateAiGroupRelationshipReply({ actor, group, members, thread, chatMeta, playerMessage, inferredTopic }) {
+  const memberSheets = members.map((member) => ({
+    id: member.id,
+    name: member.name,
+    relation: getRelation(actor.id, member.id),
+    sheet: JSON.parse(compactCharacterSheet(member)),
+  }));
+  const namedThread = buildNamedRelationshipThread(actor, members[0] || actor, thread);
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are writing a Japanese group messenger conversation for an original character relationship game.",
+    "The actor sends one message into a group chat, and 1 to 3 different group members may reply.",
+    "Each reply must keep that speaker's personality, speech style, memories, and relationship with the actor.",
+    "Different speakers must sound clearly different from each other.",
+    "Push the conversation forward with concrete questions, proposals, reactions, or remembered details.",
+    "Write only each speaker's own inner reaction or spoken words. Never narrate the actor's lines for them.",
+    `Shared world terms: ${JSON.stringify(getSharedWorldGlossary())}`,
+    "",
+    `Actor: ${compactCharacterSheet(actor)}`,
+    `Group: ${JSON.stringify({ id: group.id, name: group.name, memberIds: group.memberIds })}`,
+    `Members: ${JSON.stringify(memberSheets)}`,
+    `Conversation meta: ${JSON.stringify(chatMeta)}`,
+    `Inferred topic: ${inferredTopic}`,
+    `Actor message: ${playerMessage}`,
+    `Recent named thread: ${JSON.stringify(namedThread)}`,
+    "",
+    "Requirements:",
+    "- responses must be an array of 1 to 3 items.",
+    "- speakerId must be one of the listed member ids, never the actor id.",
+    "- use distinct speakers when possible.",
+    "- each reply should be 1 to 3 Japanese sentences.",
+    "- the replies should feel like a fusion of a novel scene and a messenger app.",
+    "- if using narration, narrate only that replying character's own reaction in one short sentence.",
+    "- never quote or summarize character-sheet data like a profile explanation.",
+    "- every speaker naturally understands the proper nouns バトル and キャラバース.",
+    "- avoid generic agreement-only lines.",
+    "- memoryHint should be short and suitable for a memory log.",
+    "- moveType should be one of ask, reveal, invite, challenge, reflect.",
+    "- nextHook should briefly describe where the group conversation can go next.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.9, state.settings.temperature),
+    maxTokens: 620,
+    responseSchema: {
+      type: "object",
+      required: ["responses", "moveType", "nextHook"],
+      properties: {
+        responses: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["speakerId", "reply", "memoryHint"],
+            properties: {
+              speakerId: { type: "string" },
+              reply: { type: "string" },
+              moodNote: { type: "string" },
+              memoryHint: { type: "string" },
+            },
+          },
+        },
+        moveType: { type: "string" },
+        nextHook: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
+async function generateAiRelationshipReply({ actor, target, relation, playerMessage, thread, chatMeta, battleBundle, inferredTopic }) {
+  const historySnapshot = buildRelationshipHistorySnapshot(actor.id, target.id, {
+    includeBattle: false,
+  });
+  const namedThread = buildNamedRelationshipThread(actor, target, thread);
+  const availableAnchors = collectCharacterAnchors(target).slice(0, 12);
+  const actorAnchors = collectCharacterAnchors(actor).slice(0, 6);
+  const recentCharacterReplies = thread
+    .filter((item) => item.sender === "character")
+    .slice(-4)
+    .map((item) => item.text);
+  const socialSignals = getRecentSocialMemoriesForPair(actor.id, target.id, 4).map((memory) => ({
+    title: memory.title,
+    body: memory.body,
+    timestamp: memory.timestamp,
+  }));
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are writing a Japanese messenger-app reply for an original character relationship game.",
+    "This is not a generic chatbot. It is a living character replying in their own voice.",
+    "Use the target character's full sheet, battle records, memories, habits, likes, dislikes, faction, origin, techniques, SNS traces, and prior interactions.",
+    "The tone should feel like a fusion of a novel scene and an in-game conversation, but still read naturally in chat.",
+    "The actor and target are different people. Never swap them. Only write the target's reply.",
+    "Write only the target character's own inner reaction and spoken words.",
+    "Never write the actor's speech, never paraphrase the actor as if the target said it, and never dump profile text like a character sheet explanation.",
+    `Shared world terms: ${JSON.stringify(getSharedWorldGlossary())}`,
+    "",
+    `Actor character: ${compactCharacterSheet(actor)}`,
+    `Target character: ${compactCharacterSheet(target)}`,
+    `Relationship: ${JSON.stringify(relation)}`,
+    `Battle record summary: ${JSON.stringify(battleBundle)}`,
+    `Relationship history snapshot: ${historySnapshot}`,
+    `Recent social signals: ${JSON.stringify(socialSignals)}`,
+    `Conversation meta: ${JSON.stringify(chatMeta)}`,
+    `Inferred topic: ${inferredTopic}`,
+    `Actor message: ${playerMessage}`,
+    `Recent named thread: ${JSON.stringify(namedThread)}`,
+    `Recent target replies to avoid repeating: ${JSON.stringify(recentCharacterReplies)}`,
+    `Target anchors: ${JSON.stringify(availableAnchors)}`,
+    `Actor anchors: ${JSON.stringify(actorAnchors)}`,
+    "",
+    "Requirements:",
+    "- reply should be 2 to 4 Japanese sentences.",
+    "- include one concrete detail tied to the target character whenever possible.",
+    "- do one forward move: ask, reveal, invite, challenge, or reflect.",
+    "- do not end with only vague agreement or a generic emotional echo.",
+    "- when battle history matters, correctly understand who won, who lost, and whether it was close or decisive.",
+    "- if there was a recent follow, like, comment, post, or battle event, you may naturally bring it up during small talk or thanks.",
+    "- if using narration, narrate only the target's own emotion or gesture in one short sentence.",
+    "- every character naturally understands the proper nouns バトル and キャラバース.",
+    "- avoid repeating the same phrase openings as the last few replies.",
+    "- moodNote should summarize the emotional reaction in one sentence.",
+    "- memoryHint should be short and suitable for a memory log.",
+    "- moveType should be one of ask, reveal, invite, challenge, reflect.",
+    "- nextHook should be a short phrase describing the next conversational opening.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.9, state.settings.temperature),
+    maxTokens: 560,
+    responseSchema: {
+      type: "object",
+      required: ["reply", "moodNote", "memoryHint", "moveType", "nextHook"],
+      properties: {
+        reply: { type: "string" },
+        moodNote: { type: "string" },
+        memoryHint: { type: "string" },
+        moveType: { type: "string" },
+        nextHook: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
