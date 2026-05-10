@@ -539,6 +539,17 @@ const elements = {
 
 init();
 
+elements.charaverseProfilePanel.addEventListener("click", (event) => {
+  const openProfileKeyButton = event.target.closest("[data-open-profile-key]");
+  if (!openProfileKeyButton) {
+    return;
+  }
+  const descriptor = resolveProfileDescriptorByKey(openProfileKeyButton.dataset.openProfileKey || "");
+  if (descriptor) {
+    openCharaverseProfile(descriptor);
+  }
+});
+
 function init() {
   bindNavigation();
   bindApiSettings();
@@ -1162,6 +1173,138 @@ function toggleProfileFollow(profileKey) {
   state.charaverseFollows[key] = !state.charaverseFollows[key];
   saveState();
   renderAll();
+}
+
+function resolveProfileDescriptorByKey(profileKey) {
+  if (!profileKey) return null;
+
+  const localCharacter = state.characters.find((character) => getCharacterProfileKey(character) === profileKey);
+  if (localCharacter) {
+    return buildProfileDescriptor({
+      key: profileKey,
+      character: localCharacter,
+    });
+  }
+
+  const communityCharacter = (state.communityCharacters || []).find((character) => getCharacterProfileKey(character) === profileKey);
+  if (communityCharacter) {
+    return buildProfileDescriptor({
+      key: profileKey,
+      character: communityCharacter,
+      profileId: communityCharacter.profileId || "",
+      profileName: communityCharacter.profileName || "",
+    });
+  }
+
+  const post = getMergedCharaversePosts().find((item) => getPostAuthorProfileKey(item) === profileKey);
+  if (post) {
+    return buildProfileDescriptor({
+      key: profileKey,
+      post,
+      snapshot: post.authorSnapshot || null,
+      profileId: post.profileId || "",
+      profileName: post.profileName || "",
+    });
+  }
+
+  return null;
+}
+
+function getProfileFollowers(profileKey) {
+  return Object.entries(state.charaverseFollows || {})
+    .filter(([, enabled]) => Boolean(enabled))
+    .filter(([followKey]) => followKey.split(":").slice(1).join(":") === profileKey)
+    .map(([followKey]) => followKey.split(":")[0])
+    .map((viewerId) => resolveProfileDescriptorByKey(`character:${viewerId}`))
+    .filter(Boolean);
+}
+
+function getProfileFollowing(profileKey) {
+  if (!String(profileKey || "").startsWith("character:")) {
+    return [];
+  }
+  const viewerId = profileKey.replace(/^character:/, "");
+  return Object.entries(state.charaverseFollows || {})
+    .filter(([, enabled]) => Boolean(enabled))
+    .filter(([followKey]) => followKey.startsWith(`${viewerId}:`))
+    .map(([followKey]) => followKey.slice(`${viewerId}:`.length))
+    .map((targetKey) => resolveProfileDescriptorByKey(targetKey))
+    .filter(Boolean);
+}
+
+function renderProfileLinkList(title, profiles, emptyText) {
+  return `
+    <section class="charaverse-follow-block">
+      <div class="section-header compact">
+        <div>
+          <p class="eyebrow">${escapeHtml(title)}</p>
+          <h4>${profiles.length}</h4>
+        </div>
+      </div>
+      ${profiles.length
+        ? `<div class="charaverse-follow-list">
+            ${profiles.map((profile) => `
+              <button class="charaverse-follow-card" type="button" data-open-profile-key="${escapeHtml(profile.key)}">
+                ${renderAvatarMarkup(getCharacterSnsIcon(profile), profile.name, "sns-comment")}
+                <div class="charaverse-follow-copy">
+                  <strong>${escapeHtml(profile.name)}</strong>
+                  <div class="charaverse-profile-handle">${escapeHtml(profile.handle || "@profile")}</div>
+                </div>
+              </button>
+            `).join("")}
+          </div>`
+        : `<div class="memory-meta">${escapeHtml(emptyText)}</div>`}
+    </section>
+  `;
+}
+
+function renderCharaverseProfilePanel() {
+  const profile = state.charaverseProfileView;
+  if (!profile) {
+    elements.charaverseProfilePanel.classList.add("hidden");
+    elements.charaverseProfilePanel.innerHTML = "";
+    return;
+  }
+
+  const posts = getProfilePosts(profile.key);
+  const viewerId = getProfileViewerId();
+  const following = isFollowingProfile(viewerId, profile.key);
+  const isSelf = profile.key === `character:${viewerId}`;
+  const followers = getProfileFollowers(profile.key);
+  const followingProfiles = getProfileFollowing(profile.key);
+
+  elements.charaverseProfilePanel.classList.remove("hidden");
+  elements.charaverseProfilePanel.innerHTML = `
+    <div class="charaverse-profile-hero">
+      <div class="charaverse-profile-main">
+        ${renderAvatarMarkup(getCharacterSnsIcon(profile), profile.name, "sns-profile")}
+        <div class="charaverse-profile-copy">
+          <p class="eyebrow">Profile</p>
+          <h3>${escapeHtml(profile.name)}</h3>
+          <div class="charaverse-profile-handle">${escapeHtml(profile.handle || "@profile")}</div>
+          <p>${escapeHtml(profile.bio)}</p>
+          <div class="charaverse-post-meta">
+            ${profile.title ? `<span class="charaverse-tag">${escapeHtml(profile.title)}</span>` : ""}
+            ${profile.faction ? `<span class="charaverse-tag">${escapeHtml(profile.faction)}</span>` : ""}
+            <span class="charaverse-tag">投稿 ${posts.length}</span>
+          </div>
+        </div>
+      </div>
+      <div class="charaverse-profile-actions">
+        <button class="secondary-btn" type="button" data-charaverse-profile-close="true">閉じる</button>
+        ${isSelf ? "" : `<button class="primary-btn" type="button" data-charaverse-follow="${escapeHtml(profile.key)}">${following ? "フォロー解除" : "フォローする"}</button>`}
+      </div>
+    </div>
+    <div class="charaverse-follow-grid">
+      ${renderProfileLinkList("Followers", followers, "まだフォロワーはいません。")}
+      ${renderProfileLinkList("Following", followingProfiles, "まだ誰もフォローしていません。")}
+    </div>
+    <div class="charaverse-profile-posts">
+      ${posts.length
+        ? posts.map((post) => renderCharaversePost(post)).join("")
+        : `<div class="charaverse-post-card"><strong>まだ投稿がありません</strong><div>このプロフィールに紐づく投稿はまだありません。</div></div>`}
+    </div>
+  `;
 }
 
 function setReplyContext(postId, commentId, targetName) {

@@ -1160,6 +1160,51 @@ input[type="range"] {
   gap: 16px;
 }
 
+.charaverse-follow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.charaverse-follow-block {
+  padding: 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(93, 205, 255, 0.14);
+  background: rgba(6, 16, 30, 0.48);
+}
+
+.charaverse-follow-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.charaverse-follow-card {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(104, 194, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #eef8ff;
+  cursor: pointer;
+}
+
+.charaverse-follow-card:hover {
+  border-color: rgba(115, 226, 255, 0.28);
+  background: rgba(92, 196, 255, 0.08);
+}
+
+.charaverse-follow-copy {
+  display: grid;
+  gap: 4px;
+}
+
 .charaverse-profile-panel .charaverse-tag {
   background: rgba(90, 196, 255, 0.16);
   color: #ebf8ff;
@@ -1240,6 +1285,10 @@ input[type="range"] {
   .charaverse-profile-main {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .charaverse-follow-grid {
+    grid-template-columns: 1fr;
   }
 
   .charaverse-profile-actions {
