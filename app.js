@@ -5,6 +5,7 @@ const INTERNAL_CHAT_URL = "/api/cohere/chat";
 const INTERNAL_TEST_URL = "/api/cohere/test";
 const COMMUNITY_SNAPSHOT_URL = "/api/community";
 const COMMUNITY_PUBLISH_CHARACTER_URL = "/api/community/character/publish";
+const COMMUNITY_IMPORT_CHARACTER_URL = "/api/community/character/import";
 const COMMUNITY_PUBLISH_POST_URL = "/api/community/post/publish";
 const COMMUNITY_POST_COMMENT_URL = "/api/community/post/comment";
 
@@ -151,6 +152,10 @@ function makeCharacter(overrides = {}) {
     victoryStyle: "",
     snsHandle: "",
     snsBio: "",
+    shareCode: "",
+    sharePassword: "",
+    shareCode: "",
+    sharePassword: "",
     notes: "",
     imageDataUrl: "",
     snsImageDataUrl: "",
@@ -477,6 +482,11 @@ const elements = {
   deleteCharacter: document.getElementById("delete-character"),
   resetCharacter: document.getElementById("reset-character"),
   communityStatus: document.getElementById("community-status"),
+  characterShareCode: document.getElementById("character-share-code"),
+  characterSharePassword: document.getElementById("character-share-password"),
+  importCharacterCode: document.getElementById("import-character-code"),
+  importCharacterPassword: document.getElementById("import-character-password"),
+  importCharacter: document.getElementById("import-character"),
   characterImagePreview: document.getElementById("character-image-preview"),
   characterImageInput: document.getElementById("character-image-input"),
   removeCharacterImage: document.getElementById("remove-character-image"),
@@ -602,6 +612,10 @@ function bindCharacterEditor() {
 
   elements.publishCharacter.addEventListener("click", async () => {
     await publishCurrentCharacter();
+  });
+
+  elements.importCharacter.addEventListener("click", async () => {
+    await importSharedCharacter();
   });
 
   elements.deleteCharacter.addEventListener("click", () => {
@@ -755,6 +769,20 @@ function bindCharacterEditor() {
     updateCharacter(current.id, { ...current, chatImageDataUrl: "" });
     saveState();
     renderAll();
+  });
+
+  elements.characterShareCode.addEventListener("input", () => {
+    const current = getEditorCharacter();
+    if (!current) return;
+    updateCharacter(current.id, { ...current, shareCode: elements.characterShareCode.value.trim().toUpperCase() });
+    saveState();
+  });
+
+  elements.characterSharePassword.addEventListener("input", () => {
+    const current = getEditorCharacter();
+    if (!current) return;
+    updateCharacter(current.id, { ...current, sharePassword: elements.characterSharePassword.value });
+    saveState();
   });
 }
 
@@ -969,6 +997,7 @@ function renderAll() {
   fillApiForm();
   fillCharacterTargetOptions();
   fillCharacterForm(getEditorCharacter());
+  fillCharacterShareControls(getEditorCharacter());
   renderCharacterPreview(getEditorCharacter());
   renderCharacterImage(getEditorCharacter());
   renderTechniqueBuilder(getEditorCharacter());
@@ -1235,6 +1264,15 @@ function fillCharacterForm(character) {
   form.spd.value = character.stats.spd;
   form.mind.value = character.stats.mind;
   form.charm.value = character.stats.charm;
+}
+
+function fillCharacterShareControls(character) {
+  if (elements.characterShareCode) {
+    elements.characterShareCode.value = character?.shareCode || "";
+  }
+  if (elements.characterSharePassword) {
+    elements.characterSharePassword.value = character?.sharePassword || "";
+  }
 }
 
 function formCharacterFromEditor() {
@@ -1937,24 +1975,94 @@ async function syncCommunitySnapshot(showSuccess = false) {
 }
 
 async function publishCurrentCharacter() {
-  const character = getEditorCharacter();
-  if (!character) {
+  const current = getEditorCharacter();
+  if (!current) {
     return;
   }
 
+  const character = ensureCharacterShareSettings({
+    ...current,
+    shareCode: (elements.characterShareCode?.value || current.shareCode || "").trim().toUpperCase(),
+    sharePassword: elements.characterSharePassword?.value ?? current.sharePassword ?? "",
+  });
+  updateCharacter(character.id, character);
+
   try {
-    await postJson(COMMUNITY_PUBLISH_CHARACTER_URL, {
+    const payload = await postJson(COMMUNITY_PUBLISH_CHARACTER_URL, {
       profileId: state.communityProfileId,
       profileName: getCommunityProfileName(),
       character,
     });
-    state.communityStatus = `${character.name} を公開しました`;
+    const publishedCode = payload?.shareCode || character.shareCode || "未設定";
+    state.communityStatus = `${character.name} を公開しました / 共有コード: ${publishedCode}`;
     await syncCommunitySnapshot(true);
     saveState();
     renderAll();
   } catch (error) {
     state.communityStatus = `公開失敗: ${error.message}`;
     saveState();
+    renderCommunityStatus();
+  }
+}
+
+function generateCharacterShareCode(name = "OC") {
+  const seed = normalizeTechniqueText(name || "oc").slice(0, 3).toUpperCase() || "OC";
+  const randomPart = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `${seed}-${randomPart}`;
+}
+
+function ensureCharacterShareSettings(character) {
+  return {
+    ...character,
+    shareCode: (character.shareCode || generateCharacterShareCode(character.name)).trim().toUpperCase(),
+    sharePassword: character.sharePassword || "",
+  };
+}
+
+async function importSharedCharacter() {
+  const shareCode = String(elements.importCharacterCode?.value || "").trim().toUpperCase();
+  const sharePassword = String(elements.importCharacterPassword?.value || "");
+  if (!shareCode) {
+    state.communityStatus = "共有コードを入力してください";
+    renderCommunityStatus();
+    return;
+  }
+
+  try {
+    const payload = await postJson(COMMUNITY_IMPORT_CHARACTER_URL, {
+      shareCode,
+      sharePassword,
+    });
+    const importedSource = payload?.character;
+    if (!importedSource?.name) {
+      throw new Error("共有キャラの取得に失敗しました");
+    }
+
+    const importedCharacter = makeCharacter({
+      ...buildBaseCustomCharacterFields(),
+      ...importedSource,
+      id: `custom-${createId()}`,
+      sourceCharacterId: importedSource.id || "",
+      importedFromProfileName: payload?.profileName || "",
+      importedShareCode: shareCode,
+      shareCode: "",
+      sharePassword: "",
+      notes: [importedSource.notes, `共有コード ${shareCode} から取り込み`, payload?.profileName ? `共有元: ${payload.profileName}` : ""]
+        .filter(Boolean)
+        .join("\n"),
+    });
+
+    state.characters.push(importedCharacter);
+    state.editorCharacterId = importedCharacter.id;
+    state.editorTechniqueIndex = -1;
+    state.selectedEnemyId = importedCharacter.id;
+    if (elements.importCharacterCode) elements.importCharacterCode.value = "";
+    if (elements.importCharacterPassword) elements.importCharacterPassword.value = "";
+    state.communityStatus = `${importedCharacter.name} を共有コード ${shareCode} から取り込みました`;
+    saveState();
+    renderAll();
+  } catch (error) {
+    state.communityStatus = `共有キャラの取り込みに失敗: ${error.message}`;
     renderCommunityStatus();
   }
 }

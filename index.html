@@ -109,6 +109,28 @@
           </div>
           <p class="helper-text" id="community-status">公開ステータス: まだ共有していません</p>
 
+          <div class="profile-grid import-panel">
+            <label>
+              公開コード
+              <input type="text" id="character-share-code" placeholder="未入力なら公開時に自動生成">
+            </label>
+            <label>
+              公開パスワード
+              <input type="password" id="character-share-password" placeholder="任意">
+            </label>
+            <label>
+              共有コードで取り込む
+              <input type="text" id="import-character-code" placeholder="例: OC-AB12CD">
+            </label>
+            <label>
+              共有パスワード
+              <input type="password" id="import-character-password" placeholder="任意">
+            </label>
+            <div class="form-actions wide">
+              <button class="secondary-btn" type="button" id="import-character">共有キャラを取り込む</button>
+            </div>
+          </div>
+
           <form id="character-form" class="editor-grid">
             <label class="wide">
               編集対象

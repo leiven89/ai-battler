@@ -68,6 +68,10 @@ const server = http.createServer(async (req, res) => {
       return await handleCommunityCharacterPublish(req, res);
     }
 
+    if (req.method === "POST" && req.url === "/api/community/character/import") {
+      return await handleCommunityCharacterImport(req, res);
+    }
+
     if (req.method === "POST" && req.url === "/api/community/post/publish") {
       return await handleCommunityPostPublish(req, res);
     }
@@ -199,7 +203,7 @@ async function handleCommunitySnapshot(res) {
     ok: true,
     backend: getCommunityBackendMode(),
     updatedAt: store.updatedAt,
-    characters: store.characters,
+    characters: store.characters.map((entry) => toPublicCommunityCharacterEntry(entry)),
     posts: store.posts,
   });
 }
@@ -218,6 +222,9 @@ async function handleCommunityCharacterPublish(req, res) {
   if (!normalizedCharacter.id || !normalizedCharacter.name) {
     return sendJson(res, 400, { message: "Published characters must include id and name." });
   }
+  normalizedCharacter.shareCode = normalizeShareCode(normalizedCharacter.shareCode) || generateServerShareCode(normalizedCharacter.name);
+  normalizedCharacter.sharePasswordHash = hashSharePassword(normalizedCharacter.sharePassword);
+  normalizedCharacter.sharePassword = "";
 
   const entry = {
     id: sanitizeFirestoreDocId(`${profileId}__${normalizedCharacter.id}`),
@@ -229,7 +236,36 @@ async function handleCommunityCharacterPublish(req, res) {
   };
 
   await saveCommunityCharacter(entry);
-  return sendJson(res, 200, { ok: true, entry });
+  return sendJson(res, 200, { ok: true, entry: toOwnerCommunityCharacterEntry(entry), shareCode: normalizedCharacter.shareCode });
+}
+
+async function handleCommunityCharacterImport(req, res) {
+  const body = await readJsonBody(req);
+  const shareCode = normalizeShareCode(body.shareCode);
+  const sharePassword = normalizeText(body.sharePassword);
+
+  if (!shareCode) {
+    return sendJson(res, 400, { message: "shareCode is required." });
+  }
+
+  const store = await getCommunityStore();
+  const entry = store.characters.find((item) => normalizeShareCode(item?.character?.shareCode) === shareCode);
+  if (!entry?.character) {
+    return sendJson(res, 404, { message: "Shared character was not found." });
+  }
+
+  const expectedHash = normalizeText(entry.character.sharePasswordHash);
+  if (expectedHash && expectedHash !== hashSharePassword(sharePassword)) {
+    return sendJson(res, 403, { message: "Password did not match." });
+  }
+
+  return sendJson(res, 200, {
+    ok: true,
+    shareCode,
+    profileId: entry.profileId,
+    profileName: entry.profileName,
+    character: sanitizeImportedCommunityCharacter(entry.character),
+  });
 }
 
 async function handleCommunityPostPublish(req, res) {
@@ -510,6 +546,9 @@ function normalizeCommunityCharacter(character) {
     gratitudeStyle: normalizeText(character.gratitudeStyle),
     defeatStyle: normalizeText(character.defeatStyle),
     victoryStyle: normalizeText(character.victoryStyle),
+    shareCode: normalizeShareCode(character.shareCode),
+    sharePassword: normalizeText(character.sharePassword),
+    sharePasswordHash: normalizeText(character.sharePasswordHash),
     notes: normalizeText(character.notes),
     imageDataUrl: normalizeImageDataUrl(character.imageDataUrl),
     snsImageDataUrl: normalizeImageDataUrl(character.snsImageDataUrl),
@@ -604,6 +643,54 @@ function normalizeImageDataUrl(value) {
     return "";
   }
   return text.slice(0, 600_000);
+}
+
+function normalizeShareCode(value) {
+  return normalizeText(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, "")
+    .slice(0, 24);
+}
+
+function generateServerShareCode(name = "OC") {
+  const seed = normalizeShareCode(name).slice(0, 3) || "OC";
+  const randomPart = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `${seed}-${randomPart}`;
+}
+
+function hashSharePassword(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return "";
+  }
+  return crypto.createHash("sha256").update(`oc-battle-link:${text}`).digest("hex");
+}
+
+function sanitizeImportedCommunityCharacter(character) {
+  const normalized = normalizeCommunityCharacter(character);
+  return {
+    ...normalized,
+    shareCode: "",
+    sharePassword: "",
+    sharePasswordHash: "",
+  };
+}
+
+function toPublicCommunityCharacterEntry(entry) {
+  return {
+    ...entry,
+    character: sanitizeImportedCommunityCharacter(entry.character || {}),
+  };
+}
+
+function toOwnerCommunityCharacterEntry(entry) {
+  return {
+    ...entry,
+    character: {
+      ...sanitizeImportedCommunityCharacter(entry.character || {}),
+      shareCode: normalizeShareCode(entry?.character?.shareCode),
+    },
+  };
 }
 
 function createServerId(prefix) {
