@@ -6472,6 +6472,311 @@ async function generateAiRelationshipReply({ actor, target, relation, playerMess
   return JSON.parse(text);
 }
 
+function trimBattleBeat(text, maxSentences = 2, maxChars = 140) {
+  const normalized = String(text || "")
+    .replace(/\r/g, " ")
+    .replace(/\n+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!normalized) return "";
+  const pieces = normalized.split(/(?<=[。！？!?])/).map((piece) => piece.trim()).filter(Boolean);
+  let joined = pieces.slice(0, maxSentences).join(" ");
+  if (!joined) joined = normalized;
+  if (joined.length > maxChars) {
+    joined = `${joined.slice(0, maxChars - 1).trim()}…`;
+  }
+  return joined;
+}
+
+function buildBattleExchangeLine(player, enemy, playerLine, enemyLine) {
+  const beats = [];
+  if (playerLine) beats.push(`${player.name}「${trimBattleBeat(playerLine, 1, 58)}」`);
+  if (enemyLine) beats.push(`${enemy.name}「${trimBattleBeat(enemyLine, 1, 58)}」`);
+  return beats.join(" ");
+}
+
+function buildBattleResultLine(playerSummary, counterSummary, relationNote) {
+  return [
+    playerSummary ? trimBattleBeat(playerSummary, 1, 70) : "",
+    counterSummary ? trimBattleBeat(counterSummary, 1, 70) : "",
+    relationNote ? trimBattleBeat(relationNote, 1, 58) : "",
+  ].filter(Boolean).join(" / ");
+}
+
+function renderBattle() {
+  const player = getPlayer();
+  const enemy = getCharacter(state.selectedEnemyId);
+  const battle = state.battle;
+  elements.battleAiMode.textContent = getAiModeText();
+
+  if (!enemy) {
+    elements.playerCard.innerHTML = renderFighterCard(player, null);
+    elements.enemyCard.innerHTML = `<strong>対戦相手なし</strong><div>キャラを追加して相手を選ぶと、ここに相手が表示されます。</div>`;
+    elements.battleLog.innerHTML = `
+      <div class="log-entry system">
+        <strong>準備中</strong>
+        <div>対戦相手がまだ選ばれていません。キャラ一覧から相手を選んでください。</div>
+      </div>
+    `;
+    elements.heatMeter.textContent = "HEAT 0";
+    elements.intervalBanner.classList.add("hidden");
+    elements.battleSubmit.disabled = true;
+    return;
+  }
+
+  if (!battle) {
+    elements.playerCard.innerHTML = renderFighterCard(player, null);
+    elements.enemyCard.innerHTML = renderFighterCard(enemy, null);
+    elements.battleLog.innerHTML = `
+      <div class="log-entry system">
+        <strong>準備中</strong>
+        <div>相手を見据えて、「バトル開始」を押すと戦闘が始まります。</div>
+      </div>
+    `;
+    elements.heatMeter.textContent = "HEAT 0";
+    elements.intervalBanner.classList.add("hidden");
+    elements.battleSubmit.disabled = false;
+    return;
+  }
+
+  const battleEnemy = getCharacter(battle.enemyId);
+  elements.playerCard.innerHTML = renderFighterCard(player, battle.playerState);
+  elements.enemyCard.innerHTML = renderFighterCard(battleEnemy, battle.enemyState);
+  const visibleLogs = battle.logs.length > 12
+    ? [battle.logs[0], ...battle.logs.slice(-11)]
+    : battle.logs;
+  elements.battleLog.innerHTML = visibleLogs.map(renderLog).join("");
+  elements.heatMeter.textContent = `HEAT ${battle.heat}`;
+  elements.battleSubmit.disabled = Boolean(battle.pending || battle.finished || battle.intervalPending);
+
+  if (battle.intervalPending) {
+    renderIntervalChoices();
+    elements.intervalBanner.classList.remove("hidden");
+  } else {
+    elements.intervalBanner.classList.add("hidden");
+  }
+}
+
+async function resolveTurn(action, chatCategory, customBattleLine = "") {
+  const battle = state.battle;
+  if (!battle) return;
+
+  battle.pending = true;
+  renderBattle();
+
+  const player = getPlayer();
+  const enemy = getCharacter(battle.enemyId);
+  const relation = getRelation("player", enemy.id);
+
+  const playerOutcome = evaluateAction(player, enemy, relation, action, battle.turn, battle.half);
+  const enemyOutcome = enemyCounterAction(
+    enemy,
+    player,
+    relation,
+    battle.turn,
+    battle.half,
+    playerOutcome.playerStateAfter,
+    playerOutcome.enemyStateAfter,
+  );
+  const battleSpeech = buildBattleSpeechInput(chatCategory, customBattleLine, battle.lastChatCategory, relation);
+  const chatDelta = battleSpeech ? battleSpeech.delta : null;
+
+  let aiText = null;
+  if (canUseApi()) {
+    try {
+      aiText = await generateAiTurnText({
+        battle,
+        player,
+        enemy,
+        relation,
+        action,
+        chatCategory: battleSpeech?.category || null,
+        customBattleLine: battleSpeech?.line || "",
+        playerOutcome,
+        enemyOutcome,
+        chatDelta,
+      });
+      state.settings.apiStatus = `貍泌・逕滓・謌仙粥: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `API螟ｱ謨励・縺溘ａ繝ｭ繝ｼ繧ｫ繝ｫ貍泌・縺ｸ蛻・崛: ${error.message}`;
+      aiText = null;
+    }
+  }
+
+  applyStateTransition(battle, relation, playerOutcome, enemyOutcome, chatDelta, battleSpeech?.category || null);
+
+  battle.logs.push({
+    type: "action",
+    label: `ターン ${battle.turn} / ${battle.half === "front" ? "前半" : "後半"}`,
+    text: trimBattleBeat(aiText?.battleLog || playerOutcome.log, 2, 150),
+  });
+
+  if (battleSpeech) {
+    battle.logs.push({
+      type: "action",
+      label: "掛け合い",
+      text: buildBattleExchangeLine(
+        player,
+        enemy,
+        aiText?.chatLine || generateFallbackBattleSpeech(player, battleSpeech, relation),
+        aiText?.enemyReaction || generateFallbackReactionLine(enemy, battleSpeech.category || "resolve", relation, battleSpeech.line),
+      ),
+    });
+  } else {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の返し`,
+      text: trimBattleBeat(aiText?.enemyInterjection || generateBattleInterjection(enemy, relation, playerOutcome, battle), 1, 92),
+    });
+  }
+
+  if (enemyOutcome) {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の反撃`,
+      text: trimBattleBeat(aiText?.counterLog || enemyOutcome.log, 2, 150),
+    });
+  }
+
+  const resultLine = buildBattleResultLine(
+    aiText?.battleSummary || playerOutcome.summary,
+    enemyOutcome ? (aiText?.counterSummary || enemyOutcome.summary) : "",
+    aiText?.relationNote || "",
+  );
+  if (resultLine) {
+    battle.logs.push({
+      type: "system",
+      label: "結果",
+      text: resultLine,
+    });
+  }
+
+  clampBattleState(battle.playerState);
+  clampBattleState(battle.enemyState);
+  relation.title = resolveRelationshipTitle(relation);
+
+  if (shouldFinishBattle(battle)) {
+    finishBattle(aiText?.memoryHint);
+  } else if (battle.turn === 3 && battle.half === "front") {
+    battle.intervalPending = true;
+    battle.logs.push({
+      type: "system",
+      label: "インターバル",
+      text: "前半終了。ここでひと言が後半の空気を変える。",
+    });
+  } else {
+    advanceTurn();
+  }
+
+  battle.pending = false;
+  saveState();
+}
+
+async function generateAiTurnText(context) {
+  const relation = context.relation;
+  const historySnapshot = buildRelationshipHistorySnapshot("player", context.enemy.id, {
+    includeBattle: true,
+    battle: context.battle,
+  });
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are the battle narrator for an original character relationship battle game.",
+    "Write Japanese prose with strong tempo: quick beats, sharp imagery, and clear turn progression.",
+    "Keep the writing dramatic, but do not let it become slow or bloated.",
+    "Do not change the numeric outcomes. Use the provided outcomes exactly.",
+    "Strongly prioritize consistency with previous battles, chats, memories, and the full character sheets.",
+    `Shared world terms: ${JSON.stringify(getSharedWorldGlossary())}`,
+    "",
+    "Output keys:",
+    "battleLog, battleSummary, chatLine, enemyReaction, enemyInterjection, counterLog, counterSummary, relationNote, memoryHint",
+    "",
+    `Turn: ${context.battle.turn}`,
+    `Half: ${context.battle.half}`,
+    `Player action: ${context.action}`,
+    `Chat category: ${context.chatCategory || "none"}`,
+    `Direct battle line: ${context.customBattleLine || "none"}`,
+    `Triggered technique: ${context.playerOutcome.triggeredTechnique ? JSON.stringify({
+      name: context.playerOutcome.triggeredTechnique.technique.name,
+      type: context.playerOutcome.triggeredTechnique.technique.type,
+      effect: context.playerOutcome.triggeredTechnique.technique.effect,
+      description: context.playerOutcome.triggeredTechnique.technique.description,
+      matchedBy: context.playerOutcome.triggeredTechnique.matchedBy,
+      matchScore: context.playerOutcome.triggeredTechnique.matchScore,
+      extraSituationCost: context.playerOutcome.techniqueSituationCost,
+    }) : "none"}`,
+    "",
+    `Player sheet: ${compactCharacterSheet(context.player)}`,
+    `Enemy sheet: ${compactCharacterSheet(context.enemy)}`,
+    `Relation now: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
+    `Last remembered event: ${relation.lastMemory}`,
+    `Relationship history snapshot: ${historySnapshot}`,
+    "",
+    `Player action outcome: damage_to_enemy ${context.playerOutcome.damage}, player_stamina_cost ${context.playerOutcome.staminaCost}, enemy_mental_change ${context.playerOutcome.mentalShift}, relation_delta ${JSON.stringify(context.playerOutcome.relationDelta)}`,
+    context.chatDelta
+      ? `Chat effect delta: ${JSON.stringify({
+          friendship: context.chatDelta.friendship,
+          rivalry: context.chatDelta.rivalry,
+          respect: context.chatDelta.respect,
+          caution: context.chatDelta.caution,
+          repeated: context.chatDelta.repeated,
+        })}`
+      : "Chat effect delta: none",
+    context.enemyOutcome
+      ? `Enemy counter outcome: damage_to_player ${context.enemyOutcome.damage}, enemy_stamina_cost ${context.enemyOutcome.staminaCost}, player_mental_change ${context.enemyOutcome.mentalShift}`
+      : "Enemy counter outcome: none",
+    "",
+    "Requirements:",
+    "- battleLog should be 2 to 3 Japanese sentences max and immediately sell motion, impact, and advantage.",
+    "- battleSummary should be 1 short sentence max.",
+    "- if Direct battle line is present, chatLine should preserve its intent and wording instead of replacing it with a template.",
+    "- chatLine should be 1 short sentence and sound like the player character.",
+    "- enemyReaction should be 1 short sentence and answer the emotional content of the line.",
+    "- enemyInterjection should be 1 short sentence that pushes tension forward.",
+    "- counterLog should be 2 to 3 Japanese sentences max and feel fast and readable.",
+    "- counterSummary should be 1 short sentence max.",
+    "- relationNote should be 1 short sentence max.",
+    "- memoryHint should be a short sentence suitable for a memory log.",
+    "- all characters naturally understand the proper nouns バトル and キャラバース.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.82, state.settings.temperature),
+    maxTokens: Math.min(state.settings.maxTokens, 520),
+    responseSchema: {
+      type: "object",
+      required: [
+        "battleLog",
+        "battleSummary",
+        "chatLine",
+        "enemyReaction",
+        "enemyInterjection",
+        "counterLog",
+        "counterSummary",
+        "relationNote",
+        "memoryHint",
+      ],
+      properties: {
+        battleLog: { type: "string" },
+        battleSummary: { type: "string" },
+        chatLine: { type: "string" },
+        enemyReaction: { type: "string" },
+        enemyInterjection: { type: "string" },
+        counterLog: { type: "string" },
+        counterSummary: { type: "string" },
+        relationNote: { type: "string" },
+        memoryHint: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the user's requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
