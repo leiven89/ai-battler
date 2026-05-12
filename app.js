@@ -370,6 +370,7 @@ const defaultState = {
   communityFeedStatus: "公開投稿: 読み込み前",
   editorCharacterId: "player",
   editorTechniqueIndex: -1,
+  battleActorId: "player",
   selectedEnemyId: "eira",
   chatActorId: "player",
   chatSelectedId: "eira",
@@ -497,6 +498,7 @@ const elements = {
   characterChatImageInput: document.getElementById("character-chat-image-input"),
   removeCharacterChatImage: document.getElementById("remove-character-chat-image"),
   enemyRoster: document.getElementById("enemy-roster"),
+  battlePlayerSelect: document.getElementById("battle-player-select"),
   battleEnemySelect: document.getElementById("battle-enemy-select"),
   battleMatchupBanner: document.getElementById("battle-matchup-banner"),
   battleMeta: document.getElementById("battle-meta"),
@@ -6730,6 +6732,681 @@ async function generateAiTurnText(context) {
     "- battleSummary should be 1 short sentence max.",
     "- if Direct battle line is present, chatLine should preserve its intent and wording instead of replacing it with a template.",
     "- chatLine should be 1 short sentence and sound like the player character.",
+    "- enemyReaction should be 1 short sentence and answer the emotional content of the line.",
+    "- enemyInterjection should be 1 short sentence that pushes tension forward.",
+    "- counterLog should be 2 to 3 Japanese sentences max and feel fast and readable.",
+    "- counterSummary should be 1 short sentence max.",
+    "- relationNote should be 1 short sentence max.",
+    "- memoryHint should be a short sentence suitable for a memory log.",
+    "- all characters naturally understand the proper nouns バトル and キャラバース.",
+  ].join("\n");
+
+  const text = await fetchCohereJson({
+    model: state.settings.model,
+    temperature: Math.max(0.82, state.settings.temperature),
+    maxTokens: Math.min(state.settings.maxTokens, 520),
+    responseSchema: {
+      type: "object",
+      required: [
+        "battleLog",
+        "battleSummary",
+        "chatLine",
+        "enemyReaction",
+        "enemyInterjection",
+        "counterLog",
+        "counterSummary",
+        "relationNote",
+        "memoryHint",
+      ],
+      properties: {
+        battleLog: { type: "string" },
+        battleSummary: { type: "string" },
+        chatLine: { type: "string" },
+        enemyReaction: { type: "string" },
+        enemyInterjection: { type: "string" },
+        counterLog: { type: "string" },
+        counterSummary: { type: "string" },
+        relationNote: { type: "string" },
+        memoryHint: { type: "string" },
+      },
+    },
+    messages: [
+      { role: "system", content: "Return only a JSON object that follows the user's requested keys." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  return JSON.parse(text);
+}
+
+function getBattleActorId() {
+  return state.battle?.playerId || state.battleActorId || "player";
+}
+
+function getBattleActorCharacter() {
+  return getCharacter(getBattleActorId()) || getCharacter("player") || state.characters[0] || null;
+}
+
+function getBattleOpponents() {
+  const actorId = state.battle?.playerId || state.battleActorId || "player";
+  return [
+    ...state.characters.filter((character) => character.id !== actorId),
+    ...(state.communityCharacters || []).filter((character) => character.id !== actorId),
+  ];
+}
+
+function ensureSelectedCharacterState() {
+  const actorFallback = getCharacter(state.battleActorId) || getCharacter("player") || state.characters[0] || null;
+  if (actorFallback) {
+    state.battleActorId = actorFallback.id;
+  }
+
+  const enemies = getBattleOpponents();
+  const fallbackEnemy = enemies[0] || null;
+  if (!getCharacter(state.selectedEnemyId) || state.selectedEnemyId === state.battleActorId) {
+    state.selectedEnemyId = fallbackEnemy?.id || "";
+  }
+
+  ensureChatPairState();
+
+  if (!getCharacter(state.editorCharacterId)) {
+    state.editorCharacterId = "player";
+  }
+}
+
+function getBattleRecordKey(actorId, targetId) {
+  return `${actorId}:${targetId}`;
+}
+
+function getBattleRecordBundle(targetId, actorId = "player") {
+  const pairKey = getBattleRecordKey(actorId, targetId);
+  const records = [...(state.battleRecords[pairKey] || state.battleRecords[targetId] || [])]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const total = records.length;
+  const wins = records.filter((record) => record.result === "win").length;
+  const losses = records.filter((record) => record.result === "loss").length;
+  const decisiveWins = records.filter((record) => record.result === "win" && record.outcomeType === "decisive").length;
+  const decisiveLosses = records.filter((record) => record.result === "loss" && record.outcomeType === "decisive").length;
+  const closeBattles = records.filter((record) => record.outcomeType === "close").length;
+  const last = records[0] || null;
+
+  return {
+    total,
+    wins,
+    losses,
+    decisiveWins,
+    decisiveLosses,
+    closeBattles,
+    last,
+    recent: records.slice(0, 5),
+  };
+}
+
+function summarizeBattleRecord(battle, enemyId, playerWon, actorId = "player") {
+  const hpGap = Math.abs(battle.playerState.hp - battle.enemyState.hp);
+  const staminaGap = Math.abs(battle.playerState.stamina - battle.enemyState.stamina);
+  let outcomeType = "standard";
+
+  if (hpGap <= 10) {
+    outcomeType = "close";
+  } else if (hpGap >= 35 || (hpGap >= 24 && staminaGap >= 20)) {
+    outcomeType = "decisive";
+  }
+
+  return {
+    id: createId(),
+    playerId: actorId,
+    opponentId: enemyId,
+    result: playerWon ? "win" : "loss",
+    outcomeType,
+    playerHp: battle.playerState.hp,
+    enemyHp: battle.enemyState.hp,
+    playerStamina: battle.playerState.stamina,
+    enemyStamina: battle.enemyState.stamina,
+    heat: battle.heat,
+    turn: battle.turn,
+    half: battle.half,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function saveBattleRecord(targetId, record, actorId = record.playerId || "player") {
+  const pairKey = getBattleRecordKey(actorId, targetId);
+  if (!state.battleRecords[pairKey]) {
+    state.battleRecords[pairKey] = [];
+  }
+  state.battleRecords[pairKey].push(record);
+  state.battleRecords[pairKey] = state.battleRecords[pairKey]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 24);
+}
+
+function buildRelationshipHistorySnapshot(actorId, targetId, options = {}) {
+  const relation = getRelation(actorId, targetId);
+  const chatMeta = getChatMeta(actorId, targetId);
+  const isLocalActor = state.characters.some((character) => character.id === actorId);
+  const battleBundle = isLocalActor ? getBattleRecordBundle(targetId, actorId) : getEmptyBattleRecordBundle();
+  const memories = getRelevantMemoriesForPair(actorId, targetId, 8)
+    .map((memory) => ({
+      title: memory.title,
+      body: memory.body,
+      category: memory.category || "",
+      tags: memory.tags || [],
+      timestamp: memory.timestamp,
+    }));
+  const socialSignals = getRecentSocialMemoriesForPair(actorId, targetId, 4)
+    .map((memory) => ({
+      title: memory.title,
+      body: memory.body,
+      timestamp: memory.timestamp,
+    }));
+  const chatDigest = getChatThread(actorId, targetId)
+    .slice(-8)
+    .map((message) => ({
+      sender: message.sender,
+      speakerRole: message.speakerRole || (message.sender === "user" ? "actor" : "target"),
+      speakerId: message.speakerId || "",
+      speakerName: message.speakerName || "",
+      text: message.text,
+      timestamp: message.timestamp,
+    }));
+
+  const payload = {
+    relationTitle: relation.title,
+    relationValues: {
+      friendship: relation.friendship,
+      rivalry: relation.rivalry,
+      respect: relation.respect,
+      caution: relation.caution,
+    },
+    conversationMeta: chatMeta,
+    lastMemory: relation.lastMemory,
+    battleHistory: battleBundle,
+    recentMemories: memories,
+    recentSocialSignals: socialSignals,
+    recentChat: chatDigest,
+  };
+
+  if (options.includeBattle && options.battle) {
+    payload.currentBattleLog = options.battle.logs
+      .slice(-8)
+      .map((entry) => ({
+        label: entry.label,
+        text: entry.text,
+      }));
+  }
+
+  return JSON.stringify(payload);
+}
+
+function bindBattleControls() {
+  elements.battlePlayerSelect?.addEventListener("change", () => {
+    state.battleActorId = elements.battlePlayerSelect.value;
+    ensureSelectedCharacterState();
+    saveState();
+    renderAll();
+  });
+
+  elements.battleEnemySelect.addEventListener("change", () => {
+    state.selectedEnemyId = elements.battleEnemySelect.value;
+    saveState();
+    renderAll();
+  });
+
+  elements.startBattle.addEventListener("click", () => {
+    startBattle();
+    switchView("battle");
+  });
+
+  elements.battleForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!state.battle || state.battle.finished || state.battle.intervalPending || state.battle.pending) {
+      return;
+    }
+
+    const form = new FormData(elements.battleForm);
+    const action = (form.get("action") || "").toString().trim();
+    const chatCategory = (form.get("chatCategory") || "greeting").toString();
+    const customBattleLine = (form.get("customBattleLine") || "").toString().trim();
+    const useChat = form.get("useChat") === "on";
+
+    if (!action) {
+      appendLog("system", "通知", "行動入力が空です。短くてもいいので、キャラらしい一手を書いてください。");
+      renderBattle();
+      return;
+    }
+
+    await resolveTurn(action, useChat ? chatCategory : null, useChat ? customBattleLine : "");
+    elements.battleForm.reset();
+  });
+}
+
+function renderEnemyRoster() {
+  const actor = getBattleActorCharacter();
+  const enemies = getBattleOpponents();
+  if (elements.battlePlayerSelect) {
+    elements.battlePlayerSelect.innerHTML = state.characters
+      .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(character.name)}</option>`)
+      .join("");
+    elements.battlePlayerSelect.value = actor?.id || state.battleActorId || "player";
+    elements.battlePlayerSelect.disabled = Boolean(state.battle && !state.battle.finished);
+  }
+
+  elements.battleEnemySelect.innerHTML = enemies
+    .map((enemy) => `<option value="${escapeHtml(enemy.id)}">${escapeHtml(enemy.name)}${enemy.isCommunity ? " [公開]" : ""}</option>`)
+    .join("");
+  elements.battleEnemySelect.value = state.selectedEnemyId;
+  elements.battleEnemySelect.disabled = Boolean(state.battle && !state.battle.finished);
+
+  elements.enemyRoster.innerHTML = enemies
+    .map((enemy) => {
+      const relation = getRelation(actor.id, enemy.id);
+      const selectedClass = state.selectedEnemyId === enemy.id ? "selected" : "";
+      return `
+        <button class="enemy-option ${selectedClass}" data-enemy-id="${escapeHtml(enemy.id)}">
+          <strong>${escapeHtml(enemy.name)}</strong>
+          <div>${escapeHtml(enemy.title || enemy.ability)}${enemy.isCommunity ? ` / 公開元 ${escapeHtml(enemy.profileName || "コミュニティ")}` : ""}</div>
+          <small>${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry}</small>
+        </button>
+      `;
+    })
+    .join("");
+
+  [...elements.enemyRoster.querySelectorAll(".enemy-option")].forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedEnemyId = button.dataset.enemyId;
+      saveState();
+      renderAll();
+    });
+  });
+
+  const enemy = getCharacter(state.selectedEnemyId);
+  if (!actor || !enemy) return;
+  const relation = getRelation(actor.id, enemy.id);
+  elements.battleMatchupBanner.innerHTML = `
+    <strong>${escapeHtml(actor.name)}</strong>
+    <span> VS </span>
+    <strong>${escapeHtml(enemy.name)}</strong>
+    <div class="memory-meta">${escapeHtml(relation.title)} / 友情 ${relation.friendship} / 因縁 ${relation.rivalry} / 尊敬 ${relation.respect}</div>
+  `;
+  elements.battleMeta.innerHTML = `
+    <li><strong>操作キャラ</strong> ${escapeHtml(actor.name)}</li>
+    <li><strong>対戦相手</strong> ${escapeHtml(enemy.name)}</li>
+    <li><strong>関係</strong> ${escapeHtml(relation.title)}</li>
+    <li><strong>最後の記憶</strong> ${escapeHtml(relation.lastMemory)}</li>
+    <li><strong>AI演出</strong> ${escapeHtml(getAiModeText())}</li>
+  `;
+}
+
+function startBattle() {
+  const player = getBattleActorCharacter();
+  const enemy = getCharacter(state.selectedEnemyId);
+  if (!player || !enemy || player.id === enemy.id) {
+    appendSystemNotice("操作キャラと対戦相手を別々に選んでください。");
+    return;
+  }
+  const relation = getRelation(player.id, enemy.id);
+  state.battle = {
+    playerId: player.id,
+    enemyId: enemy.id,
+    turn: 1,
+    half: "front",
+    heat: 0,
+    finished: false,
+    pending: false,
+    intervalPending: false,
+    playerState: { hp: 100, stamina: 100, mental: 100, awaken: 0 },
+    enemyState: { hp: 100, stamina: 100, mental: 100, awaken: 0 },
+    logs: [
+      {
+        type: "system",
+        label: "バトル開始",
+        text: `${player.name} VS ${enemy.name}。関係「${relation.title}」。${openingLine(player, enemy, relation)}`,
+      },
+    ],
+    lastChatCategory: null,
+  };
+  saveState();
+  renderBattle();
+}
+
+function renderBattle() {
+  const activePlayer = state.battle?.playerId ? getCharacter(state.battle.playerId) : getBattleActorCharacter();
+  const enemy = getCharacter(state.selectedEnemyId);
+  const battle = state.battle;
+  elements.battleAiMode.textContent = getAiModeText();
+
+  if (!enemy || !activePlayer) {
+    elements.playerCard.innerHTML = renderFighterCard(getCharacter("player") || state.characters[0], null);
+    elements.enemyCard.innerHTML = `<strong>対戦相手なし</strong><div>操作キャラと相手を選ぶと、ここにバトル情報が出ます。</div>`;
+    elements.battleLog.innerHTML = `
+      <div class="log-entry system">
+        <strong>準備中</strong>
+        <div>まずは操作キャラと対戦相手を選んでください。</div>
+      </div>
+    `;
+    elements.heatMeter.textContent = "HEAT 0";
+    elements.intervalBanner.classList.add("hidden");
+    elements.battleSubmit.disabled = true;
+    return;
+  }
+
+  if (!battle) {
+    elements.playerCard.innerHTML = renderFighterCard(activePlayer, null);
+    elements.enemyCard.innerHTML = renderFighterCard(enemy, null);
+    elements.battleLog.innerHTML = `
+      <div class="log-entry system">
+        <strong>準備中</strong>
+        <div>${escapeHtml(activePlayer.name)}で挑む準備ができています。「バトル開始」を押すと戦闘が始まります。</div>
+      </div>
+    `;
+    elements.heatMeter.textContent = "HEAT 0";
+    elements.intervalBanner.classList.add("hidden");
+    elements.battleSubmit.disabled = false;
+    return;
+  }
+
+  const battleEnemy = getCharacter(battle.enemyId);
+  const battlePlayer = getCharacter(battle.playerId) || activePlayer;
+  elements.playerCard.innerHTML = renderFighterCard(battlePlayer, battle.playerState);
+  elements.enemyCard.innerHTML = renderFighterCard(battleEnemy, battle.enemyState);
+  const visibleLogs = battle.logs.length > 12
+    ? [battle.logs[0], ...battle.logs.slice(-11)]
+    : battle.logs;
+  elements.battleLog.innerHTML = visibleLogs.map(renderLog).join("");
+  elements.heatMeter.textContent = `HEAT ${battle.heat}`;
+  elements.battleSubmit.disabled = Boolean(battle.pending || battle.finished || battle.intervalPending);
+
+  if (battle.intervalPending) {
+    renderIntervalChoices();
+    elements.intervalBanner.classList.remove("hidden");
+  } else {
+    elements.intervalBanner.classList.add("hidden");
+  }
+}
+
+async function resolveTurn(action, chatCategory, customBattleLine = "") {
+  const battle = state.battle;
+  if (!battle) return;
+
+  battle.pending = true;
+  renderBattle();
+
+  const player = getCharacter(battle.playerId) || getBattleActorCharacter();
+  const enemy = getCharacter(battle.enemyId);
+  const relation = getRelation(player.id, enemy.id);
+
+  const playerOutcome = evaluateAction(player, enemy, relation, action, battle.turn, battle.half);
+  const enemyOutcome = enemyCounterAction(
+    enemy,
+    player,
+    relation,
+    battle.turn,
+    battle.half,
+    playerOutcome.playerStateAfter,
+    playerOutcome.enemyStateAfter,
+  );
+  const battleSpeech = buildBattleSpeechInput(chatCategory, customBattleLine, battle.lastChatCategory, relation);
+  const chatDelta = battleSpeech ? battleSpeech.delta : null;
+
+  let aiText = null;
+  if (canUseApi()) {
+    try {
+      aiText = await generateAiTurnText({
+        battle,
+        player,
+        enemy,
+        relation,
+        action,
+        chatCategory: battleSpeech?.category || null,
+        customBattleLine: battleSpeech?.line || "",
+        playerOutcome,
+        enemyOutcome,
+        chatDelta,
+      });
+      state.settings.apiStatus = `バトル演出生成: ${state.settings.model}`;
+    } catch (error) {
+      state.settings.apiStatus = `API失敗のためローカル戦闘演出へ切替: ${error.message}`;
+      aiText = null;
+    }
+  }
+
+  applyStateTransition(battle, relation, playerOutcome, enemyOutcome, chatDelta, battleSpeech?.category || null);
+
+  battle.logs.push({
+    type: "action",
+    label: `ターン ${battle.turn} / ${battle.half === "front" ? "前半" : "後半"}`,
+    text: trimBattleBeat(aiText?.battleLog || playerOutcome.log, 2, 150),
+  });
+
+  if (battleSpeech) {
+    battle.logs.push({
+      type: "action",
+      label: "掛け合い",
+      text: buildBattleExchangeLine(
+        player,
+        enemy,
+        aiText?.chatLine || generateFallbackBattleSpeech(player, battleSpeech, relation),
+        aiText?.enemyReaction || generateFallbackReactionLine(enemy, battleSpeech.category || "resolve", relation, battleSpeech.line),
+      ),
+    });
+  } else {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の返し`,
+      text: trimBattleBeat(aiText?.enemyInterjection || generateBattleInterjection(enemy, relation, playerOutcome, battle), 1, 92),
+    });
+  }
+
+  if (enemyOutcome) {
+    battle.logs.push({
+      type: "action",
+      label: `${enemy.name}の反撃`,
+      text: trimBattleBeat(aiText?.counterLog || enemyOutcome.log, 2, 150),
+    });
+  }
+
+  const resultLine = buildBattleResultLine(
+    aiText?.battleSummary || playerOutcome.summary,
+    enemyOutcome ? (aiText?.counterSummary || enemyOutcome.summary) : "",
+    aiText?.relationNote || "",
+  );
+  if (resultLine) {
+    battle.logs.push({
+      type: "system",
+      label: "結果",
+      text: resultLine,
+    });
+  }
+
+  clampBattleState(battle.playerState);
+  clampBattleState(battle.enemyState);
+  relation.title = resolveRelationshipTitle(relation);
+
+  if (shouldFinishBattle(battle)) {
+    finishBattle(aiText?.memoryHint);
+  } else if (battle.turn === 3 && battle.half === "front") {
+    battle.intervalPending = true;
+    battle.logs.push({
+      type: "system",
+      label: "インターバル",
+      text: "前半終了。ここでのひと言が後半の空気を変える。",
+    });
+  } else {
+    advanceTurn();
+  }
+
+  battle.pending = false;
+  saveState();
+}
+
+function resolveInterval(choiceKey) {
+  const battle = state.battle;
+  const player = getCharacter(battle?.playerId) || getBattleActorCharacter();
+  const enemy = getCharacter(battle.enemyId);
+  const relation = getRelation(player.id, enemy.id);
+  const choice = intervalChoices.find((item) => item.key === choiceKey);
+  if (!choice) return;
+
+  relation.friendship += choice.friendship;
+  relation.rivalry += choice.rivalry;
+  relation.respect += choice.respect;
+  relation.caution += choice.caution;
+  battle.heat += choice.heat;
+  relation.title = resolveRelationshipTitle(relation);
+  relation.lastMemory = `インターバルで「${choice.label}」を選び、空気が少し変わった。`;
+
+  battle.logs.push({
+    type: "action",
+    label: "インターバル会話",
+    text: `${player.name}は「${choice.label}」を選んだ。${enemy.name}の視線がわずかに変わる。`,
+  });
+
+  battle.intervalPending = false;
+  battle.half = "back";
+  battle.turn = 4;
+  saveMemory(enemy.id, `インターバルで${choice.label}`, relation.lastMemory, player.id, "battle", ["battle", "interval"]);
+  saveState();
+}
+
+function finishBattle(memoryHint = "") {
+  const battle = state.battle;
+  const player = getCharacter(battle?.playerId) || getBattleActorCharacter();
+  const enemy = getCharacter(battle.enemyId);
+  const relation = getRelation(player.id, enemy.id);
+  const playerWon = battle.enemyState.hp <= battle.playerState.hp;
+  const battleRecord = summarizeBattleRecord(battle, enemy.id, playerWon, player.id);
+  battle.finished = true;
+
+  const postEvent = resolvePostBattleEvent(relation, playerWon, enemy, memoryHint, player);
+  relation.friendship += postEvent.friendship;
+  relation.rivalry += postEvent.rivalry;
+  relation.respect += postEvent.respect;
+  relation.caution += postEvent.caution;
+  relation.title = resolveRelationshipTitle(relation);
+  relation.lastMemory = postEvent.memory;
+
+  battle.logs.push({
+    type: "system",
+    label: "決着",
+    text: postEvent.log,
+  });
+
+  saveBattleRecord(enemy.id, battleRecord, player.id);
+  saveMemory(enemy.id, postEvent.title, postEvent.memory, player.id, "battle", ["battle", "result"]);
+}
+
+function resolvePostBattleEvent(relation, playerWon, enemy, memoryHint, player) {
+  const actorName = player?.name || "このキャラ";
+  if (relation.friendship >= 22 && relation.rivalry <= 18) {
+    return {
+      title: "戦後の友情イベント",
+      friendship: 12,
+      rivalry: 0,
+      respect: 3,
+      caution: -2,
+      memory: memoryHint || `${enemy.name}は戦闘後、隣に立てる相手として${actorName}を意識した。`,
+      log: `${enemy.name}は武器を下ろし、静かに息をついた。「次は敵じゃなく、隣で戦ってみたい」`,
+    };
+  }
+
+  if (relation.rivalry >= 26) {
+    return {
+      title: "因縁が刻まれた",
+      friendship: -1,
+      rivalry: 18,
+      respect: 4,
+      caution: 4,
+      memory: memoryHint || `${enemy.name}はこの戦いを忘れない屈辱として記録した。`,
+      log: `${enemy.name}は血の滲む拳を握りしめた。「この屈辱、次は必ず返す」`,
+    };
+  }
+
+  if (relation.respect >= 18) {
+    return {
+      title: "認めた強者",
+      friendship: 2,
+      rivalry: 2,
+      respect: 15,
+      caution: 1,
+      memory: memoryHint || `${enemy.name}は${actorName}を、ただの敵ではない強者として記憶した。`,
+      log: `${enemy.name}は静かに武器を下ろした。「認めよう。お前は、ただの敵じゃない」`,
+    };
+  }
+
+  return {
+    title: playerWon ? "再戦を望む相手" : "敗北を刻んだ相手",
+    friendship: playerWon ? 1 : 0,
+    rivalry: 6,
+    respect: 5,
+    caution: 3,
+    memory: memoryHint || (playerWon
+      ? `${enemy.name}は侮れない相手として${actorName}を強く記憶した。`
+      : `${enemy.name}に敗北し、${actorName}は悔しさとともにその名を刻んだ。`),
+    log: playerWon
+      ? `勝者の余韻の中でも、${enemy.name}の視線には次を見据える熱が残っていた。`
+      : `${actorName}は膝をついた。${enemy.name}の勝利は、新たな物語の始まりとして刻まれる。`,
+  };
+}
+
+async function generateAiTurnText(context) {
+  const relation = context.relation;
+  const historySnapshot = buildRelationshipHistorySnapshot(context.player.id, context.enemy.id, {
+    includeBattle: true,
+    battle: context.battle,
+  });
+  const prompt = [
+    "Generate a JSON object only.",
+    "You are the battle narrator for an original character relationship battle game.",
+    "Write Japanese prose with strong tempo: quick beats, sharp imagery, and clear turn progression.",
+    "Keep the writing dramatic, but do not let it become slow or bloated.",
+    "Do not change the numeric outcomes. Use the provided outcomes exactly.",
+    "Strongly prioritize consistency with previous battles, chats, memories, and the full character sheets.",
+    `Shared world terms: ${JSON.stringify(getSharedWorldGlossary())}`,
+    "",
+    "Output keys:",
+    "battleLog, battleSummary, chatLine, enemyReaction, enemyInterjection, counterLog, counterSummary, relationNote, memoryHint",
+    "",
+    `Turn: ${context.battle.turn}`,
+    `Half: ${context.battle.half}`,
+    `Player action: ${context.action}`,
+    `Chat category: ${context.chatCategory || "none"}`,
+    `Direct battle line: ${context.customBattleLine || "none"}`,
+    `Triggered technique: ${context.playerOutcome.triggeredTechnique ? JSON.stringify({
+      name: context.playerOutcome.triggeredTechnique.technique.name,
+      type: context.playerOutcome.triggeredTechnique.technique.type,
+      effect: context.playerOutcome.triggeredTechnique.technique.effect,
+      description: context.playerOutcome.triggeredTechnique.technique.description,
+      matchedBy: context.playerOutcome.triggeredTechnique.matchedBy,
+      matchScore: context.playerOutcome.triggeredTechnique.matchScore,
+      extraSituationCost: context.playerOutcome.techniqueSituationCost,
+    }) : "none"}`,
+    "",
+    `Player sheet: ${compactCharacterSheet(context.player)}`,
+    `Enemy sheet: ${compactCharacterSheet(context.enemy)}`,
+    `Relation now: friendship ${relation.friendship}, rivalry ${relation.rivalry}, respect ${relation.respect}, caution ${relation.caution}, title ${relation.title}`,
+    `Last remembered event: ${relation.lastMemory}`,
+    `Relationship history snapshot: ${historySnapshot}`,
+    "",
+    `Player action outcome: damage_to_enemy ${context.playerOutcome.damage}, player_stamina_cost ${context.playerOutcome.staminaCost}, enemy_mental_change ${context.playerOutcome.mentalShift}, relation_delta ${JSON.stringify(context.playerOutcome.relationDelta)}`,
+    context.chatDelta
+      ? `Chat effect delta: ${JSON.stringify({
+          friendship: context.chatDelta.friendship,
+          rivalry: context.chatDelta.rivalry,
+          respect: context.chatDelta.respect,
+          caution: context.chatDelta.caution,
+          repeated: context.chatDelta.repeated,
+        })}`
+      : "Chat effect delta: none",
+    context.enemyOutcome
+      ? `Enemy counter outcome: damage_to_player ${context.enemyOutcome.damage}, enemy_stamina_cost ${context.enemyOutcome.staminaCost}, player_mental_change ${context.enemyOutcome.mentalShift}`
+      : "Enemy counter outcome: none",
+    "",
+    "Requirements:",
+    "- battleLog should be 2 to 3 Japanese sentences max and immediately sell motion, impact, and advantage.",
+    "- battleSummary should be 1 short sentence max.",
+    "- if Direct battle line is present, chatLine should preserve its intent and wording instead of replacing it with a template.",
+    "- chatLine should be 1 short sentence and sound like the current player character.",
     "- enemyReaction should be 1 short sentence and answer the emotional content of the line.",
     "- enemyInterjection should be 1 short sentence that pushes tension forward.",
     "- counterLog should be 2 to 3 Japanese sentences max and feel fast and readable.",
